@@ -22,11 +22,23 @@ const GS=`
 // ─── STORAGE ─────────────────────────────────────────────────────────────────
 const SK="pmp60v2";
 async function loadProfile(){
-  try{const r=await window.storage.get(SK);return r?JSON.parse(r.value):null;}
-  catch{return null;}
+  try{
+    if(window?.storage?.get){
+      const r=await window.storage.get(SK);
+      return r?JSON.parse(r.value):null;
+    }
+    const raw=window.localStorage.getItem(SK);
+    return raw?JSON.parse(raw):null;
+  }catch{return null;}
 }
 async function saveProfile(p){
-  try{await window.storage.set(SK,JSON.stringify(p));}catch{}
+  try{
+    if(window?.storage?.set){
+      await window.storage.set(SK,JSON.stringify(p));
+      return;
+    }
+    window.localStorage.setItem(SK,JSON.stringify(p));
+  }catch{}
 }
 function freshProfile(intensity="Standard"){
   return{
@@ -143,129 +155,554 @@ function getDifficultyFromDay(day,domainScore){
   return"Hard to Exam-level (ambiguous multi-step scenarios)";
 }
 
-// ─── AI ──────────────────────────────────────────────────────────────────────
+// ─── AI / LOCAL GENERATORS ─────────────────────────────────────────────────────
+const TOPIC_DETAILS={
+  "Stakeholder Identification & Analysis":{
+    domain:"people",
+    lessonTitle:"Identify the right stakeholders before you solve the wrong problem",
+    tldr:"A PMP-level project manager first identifies who is affected, what matters to them, and how much influence they have before choosing an action.",
+    keyPoints:[
+      "Map influence, impact, and interest early rather than reacting after resistance appears.",
+      "Separate stakeholder concerns from assumptions; verify what success looks like for each group.",
+      "Tailor communication methods to audience needs instead of sending the same update to everyone.",
+      "On the exam, the best next step usually starts with understanding people before escalating."
+    ],
+    example:"A sponsor asks for a fast rollout, but end users are anxious about workflow disruption. The PM pauses to assess stakeholder needs, then creates a tailored engagement plan before finalizing rollout communications.",
+    mindset:"PMI rewards proactive stakeholder analysis, tailored engagement, and collaboration before escalation or command-and-control responses."
+  },
+  "Stakeholder Engagement & Communication":{
+    domain:"people",
+    lessonTitle:"Engage stakeholders intentionally, not just frequently",
+    tldr:"Good PMP answers focus on the right communication with the right stakeholder at the right time.",
+    keyPoints:[
+      "Communication plans should reflect stakeholder needs, not just project manager habits.",
+      "Resistance often signals a gap in understanding, alignment, or trust.",
+      "Escalation comes after the PM has tried direct engagement, clarification, and collaboration.",
+      "On the exam, 'meet, assess, and align' often beats 'email, announce, and move on.'"
+    ],
+    example:"A department head keeps missing steering updates and later objects to decisions. The PM switches to short decision-focused briefings and confirms their preferred communication format.",
+    mindset:"PMI prefers direct communication, active listening, and stakeholder-specific engagement over passive broadcast updates."
+  },
+  "Team Leadership & Servant Leadership":{
+    domain:"people",
+    lessonTitle:"Lead the team by removing obstacles, not controlling every move",
+    tldr:"Servant leadership means helping the team succeed, coaching them, and clearing impediments so they can deliver value.",
+    keyPoints:[
+      "Support autonomy while ensuring clarity on goals, roles, and priorities.",
+      "Coach first, direct second, and escalate only when needed.",
+      "Build trust by listening, resolving blockers, and protecting the team from unnecessary disruption.",
+      "On the exam, the PM often succeeds by enabling the team rather than micromanaging it."
+    ],
+    example:"A cross-functional team is stuck waiting on approvals. The PM coordinates decision-makers, removes the blocker, and lets the team resume work without dictating technical details.",
+    mindset:"PMI often favors coaching, facilitation, and impediment removal over top-down control."
+  },
+  "Conflict Resolution & Negotiation":{
+    domain:"people",
+    lessonTitle:"Handle conflict early and directly",
+    tldr:"PMP questions usually reward resolving conflict through collaboration and root-cause understanding before formal escalation.",
+    keyPoints:[
+      "Address conflict quickly before positions harden and trust erodes.",
+      "Focus on interests and facts, not personalities.",
+      "Use collaboration first when time and context allow.",
+      "Escalate only after the PM has made a reasonable effort to resolve the issue."
+    ],
+    example:"Two leads disagree on priorities and the team stalls. The PM brings them together, clarifies project objectives, and facilitates a shared decision based on impact and value.",
+    mindset:"PMI generally prefers collaborative problem-solving over avoidance, forcing, or immediate escalation."
+  },
+  "Team Development & Motivation":{
+    domain:"people",
+    lessonTitle:"High-performing teams are built, not assumed",
+    tldr:"A project manager improves delivery by developing team capability, motivation, and trust over time.",
+    keyPoints:[
+      "Identify skills gaps and create opportunities for coaching or training.",
+      "Recognition and clarity can improve motivation as much as process changes.",
+      "Adapt leadership style to team maturity and context.",
+      "Exam answers often favor coaching and development over blame."
+    ],
+    example:"A newer team member keeps missing expectations. The PM pairs them with an experienced teammate and clarifies success criteria instead of immediately escalating performance concerns.",
+    mindset:"PMI likes supportive leadership that builds team performance while maintaining accountability."
+  },
+  "Emotional Intelligence & Empathy":{
+    domain:"people",
+    lessonTitle:"Read the room before you react",
+    tldr:"Emotional intelligence helps the PM understand concerns, manage reactions, and choose the best next conversation.",
+    keyPoints:[
+      "Notice signals like frustration, silence, or defensiveness before they become bigger issues.",
+      "Respond with curiosity and empathy, especially in tense situations.",
+      "Strong PMs manage both stakeholder emotions and their own.",
+      "On the exam, empathy often leads to the most effective next step."
+    ],
+    example:"A product owner becomes defensive in a meeting after a missed deadline. Instead of pushing harder publicly, the PM follows up privately to understand the underlying issue and re-plan support.",
+    mindset:"PMI often rewards self-awareness, empathy, and constructive conversations over public confrontation."
+  },
+  "Virtual & Distributed Teams":{
+    domain:"people",
+    lessonTitle:"Distributed teams need more clarity, not more meetings",
+    tldr:"The PM should reduce confusion in remote teams through explicit agreements, transparent communication, and strong coordination habits.",
+    keyPoints:[
+      "Clarify ownership, norms, and communication channels early.",
+      "Use the right tool for the message: sync for complexity, async for clarity and tracking.",
+      "Build inclusion across time zones and cultures.",
+      "Exam answers often prioritize alignment and visibility for remote teams."
+    ],
+    example:"A global team duplicates work because updates live in private chats. The PM establishes a shared work board, decision log, and explicit handoff rules across time zones.",
+    mindset:"PMI favors structure, clarity, and inclusive communication for distributed delivery."
+  },
+  "Risk Identification & Assessment":{
+    domain:"process",
+    lessonTitle:"Name the risk before it becomes the issue",
+    tldr:"The PM should identify risks early, assess probability and impact, and plan before the problem materializes.",
+    keyPoints:[
+      "Risks are uncertain future events; issues are happening now.",
+      "Risk identification should be continuous, not one-and-done.",
+      "Assess both likelihood and impact so responses match exposure.",
+      "On the exam, the best answer often updates the risk register before acting."
+    ],
+    example:"A vendor has missed two internal milestones but has not yet missed the contract date. The PM logs the schedule risk, assesses impact, and defines response actions before it becomes an issue.",
+    mindset:"PMI likes proactive risk thinking, documented analysis, and planned responses instead of panic reactions."
+  },
+  "Risk Response Planning":{
+    domain:"process",
+    lessonTitle:"A risk plan is only useful if someone can act on it",
+    tldr:"Strong PMP answers choose a response strategy, assign ownership, and plan monitoring.",
+    keyPoints:[
+      "Threat strategies include avoid, mitigate, transfer, and accept.",
+      "Opportunity strategies include exploit, enhance, share, and accept.",
+      "Risk responses should be practical, owned, and time-bound.",
+      "The exam often rewards updating plans and owners before reacting ad hoc."
+    ],
+    example:"A critical supplier may face customs delays. The PM chooses mitigation by ordering earlier, setting checkpoints, and naming an owner to monitor lead times weekly.",
+    mindset:"PMI prefers structured, documented risk responses with clear ownership."
+  },
+  "Change Control & Integrated Change Management":{
+    domain:"process",
+    lessonTitle:"Not every request is a yes, but every request deserves a process",
+    tldr:"When scope, schedule, or cost may change, the PM evaluates impact and follows change control before implementation.",
+    keyPoints:[
+      "Assess impacts across scope, schedule, cost, quality, and risk.",
+      "Do not implement unapproved changes in predictive environments.",
+      "Keep stakeholders informed while following the approved process.",
+      "On the exam, analyze first and route through governance before acting."
+    ],
+    example:"A sponsor asks for an additional reporting feature late in execution. The PM documents the request, performs impact analysis, and presents it through change control before the team starts work.",
+    mindset:"PMI rewards disciplined impact analysis and formal control over informal promise-making."
+  },
+  "Scope Management & WBS":{
+    domain:"process",
+    lessonTitle:"Clear scope prevents late surprises",
+    tldr:"A project manager protects delivery by defining what is included, what is not, and how work is decomposed.",
+    keyPoints:[
+      "A WBS clarifies deliverables and reduces ambiguity.",
+      "Unclear scope leads to rework, conflict, and hidden assumptions.",
+      "Validate understanding early with stakeholders and the team.",
+      "On the exam, clarification and decomposition often come before execution."
+    ],
+    example:"Teams keep interpreting a deliverable differently. The PM updates the scope baseline and decomposes the work so each team understands expected outputs.",
+    mindset:"PMI favors explicit scope definition and shared understanding before more execution starts."
+  },
+  "Schedule Development & CPM":{
+    domain:"process",
+    lessonTitle:"Know the path that controls the finish date",
+    tldr:"The PM should understand dependencies, sequencing, and the critical path before making schedule decisions.",
+    keyPoints:[
+      "Critical path activities have zero or limited float and directly affect finish date.",
+      "Fast tracking and crashing can help, but each adds tradeoffs and risk.",
+      "Schedule compression should follow analysis, not guesswork.",
+      "The exam rewards data-based schedule decisions."
+    ],
+    example:"A customer wants the delivery date moved up by two weeks. The PM analyzes the critical path and evaluates feasible compression options before committing.",
+    mindset:"PMI prefers analysis of dependencies and impacts before changing dates or directing overtime."
+  },
+  "Earned Value Management (EVM)":{
+    domain:"process",
+    lessonTitle:"Use EVM to read the project, not just calculate it",
+    tldr:"EVM helps the PM understand cost and schedule performance so they can make informed decisions.",
+    keyPoints:[
+      "CPI compares earned value to actual cost; SPI compares earned value to planned value.",
+      "A CPI below 1 means over budget; an SPI below 1 means behind schedule.",
+      "Metrics matter most when they guide action.",
+      "On the exam, interpret the numbers before choosing the next step."
+    ],
+    example:"Midway through a project, CPI is 0.82 and SPI is 0.95. The PM reviews root causes and identifies corrective actions rather than reporting metrics alone.",
+    mindset:"PMI wants you to interpret performance data and respond appropriately, not just memorize formulas."
+  },
+  "Quality Assurance & Quality Control":{
+    domain:"process",
+    lessonTitle:"Build quality in before you inspect quality out",
+    tldr:"The PM should improve processes to prevent defects, then use control activities to verify outputs.",
+    keyPoints:[
+      "Quality assurance improves the process; quality control checks the results.",
+      "Prevention is usually cheaper than correction.",
+      "Metrics and root-cause analysis help reduce repeated defects.",
+      "On the exam, improving the process often comes before inspecting more often."
+    ],
+    example:"A team keeps finding the same documentation errors in review. The PM updates the template and checklist, then verifies improvement in the next review cycle.",
+    mindset:"PMI favors prevention, process improvement, and fact-based quality management."
+  },
+  "Procurement & Contract Types":{
+    domain:"process",
+    lessonTitle:"Choose the contract that fits the uncertainty",
+    tldr:"Contract strategy should reflect risk, scope clarity, and who is best positioned to manage uncertainty.",
+    keyPoints:[
+      "Fixed-price is best when scope is clear and stable.",
+      "Cost-reimbursable shifts more uncertainty to the buyer.",
+      "Time and materials works well for uncertain effort with controls in place.",
+      "On the exam, match the contract type to risk allocation and scope maturity."
+    ],
+    example:"A project needs specialized consulting but exact effort is unknown. The PM recommends a time-and-materials agreement with a not-to-exceed cap.",
+    mindset:"PMI prefers intentional procurement choices based on clarity, risk, and control."
+  },
+  "Agile & Scrum Delivery":{
+    domain:"process",
+    lessonTitle:"Deliver value early, then adapt",
+    tldr:"In agile settings, the PM or servant leader supports incremental delivery, rapid feedback, and continuous improvement.",
+    keyPoints:[
+      "The backlog is refined continuously as learning emerges.",
+      "The team should deliver usable value in short cycles.",
+      "Stakeholder feedback should shape future work, not derail the current sprint midstream without process.",
+      "Exam answers often favor transparency, adaptation, and protecting the team."
+    ],
+    example:"A stakeholder wants to add work during a sprint. The PM explains how to capture the request in the backlog and prioritize it for a future sprint unless it is truly urgent and the team agrees on a change.",
+    mindset:"PMI rewards transparency, iterative value delivery, and respect for agile roles and cadence."
+  },
+  "Kanban & Flow-Based Methods":{
+    domain:"process",
+    lessonTitle:"Visualize work to improve flow",
+    tldr:"Kanban helps teams limit work in progress, spot bottlenecks, and improve throughput over time.",
+    keyPoints:[
+      "Visual boards make blockers and aging work easier to see.",
+      "Limiting work in progress improves flow and focus.",
+      "Flow metrics are more useful than opinions when diagnosing bottlenecks.",
+      "On the exam, improve the system before pushing people to work faster."
+    ],
+    example:"A support team has too many items in progress and very little completion. The PM introduces WIP limits and reviews blocked items daily to improve flow.",
+    mindset:"PMI favors managing the workflow, not just urging the team to do more at once."
+  },
+  "Hybrid Delivery Approaches":{
+    domain:"process",
+    lessonTitle:"Use predictive and agile where each fits best",
+    tldr:"Hybrid delivery works when the PM intentionally chooses which parts need stability and which parts benefit from iteration.",
+    keyPoints:[
+      "Not all work on the same project needs the same delivery approach.",
+      "Stable compliance-heavy work may stay predictive while user-facing features iterate.",
+      "Governance still matters even when delivery is adaptive.",
+      "On the exam, hybrid answers succeed when they balance control with flexibility."
+    ],
+    example:"A project has a fixed regulatory deadline but evolving user requirements. The PM uses predictive governance for compliance deliverables and agile iterations for interface design.",
+    mindset:"PMI likes deliberate tailoring rather than forcing one delivery style onto every situation."
+  },
+  "Project Monitoring & Controlling":{
+    domain:"process",
+    lessonTitle:"Monitor to make decisions, not just reports",
+    tldr:"The PM tracks performance so they can detect variance early and take informed corrective action.",
+    keyPoints:[
+      "Compare actual results against baselines or agreed targets.",
+      "Investigate material variances before choosing corrective actions.",
+      "Use trend data to see what is likely to happen next.",
+      "On the exam, analyze the cause before selecting the response."
+    ],
+    example:"Defects and delays rise across two reporting periods. The PM reviews trend data, identifies the root cause, and proposes corrective action to the team and sponsor.",
+    mindset:"PMI rewards fact-based monitoring and thoughtful corrective action."
+  },
+  "Business Case & Benefits Realization":{
+    domain:"bizEnv",
+    lessonTitle:"Projects exist to create business value",
+    tldr:"The PM should understand the business case and keep delivery aligned to intended benefits.",
+    keyPoints:[
+      "A successful project meets more than schedule and budget; it supports intended outcomes.",
+      "Benefits realization often continues beyond project closure.",
+      "Decisions should connect back to value and strategy.",
+      "On the exam, the best answer often protects business value, not just task completion."
+    ],
+    example:"A team proposes a feature that adds complexity but little benefit. The PM compares it against the business case and recommends focusing on higher-value deliverables.",
+    mindset:"PMI favors decisions tied to value, outcomes, and the original business rationale."
+  },
+  "Organizational Strategy & Value Delivery":{
+    domain:"bizEnv",
+    lessonTitle:"Keep the project connected to strategy",
+    tldr:"The PM should understand how the project supports organizational goals so they can prioritize wisely.",
+    keyPoints:[
+      "Strategic alignment helps the PM make better tradeoff decisions.",
+      "Value delivery may require adjusting work when business priorities shift.",
+      "Not every stakeholder request deserves equal weight if it reduces strategic value.",
+      "On the exam, aligning work to organizational goals is often the strongest rationale."
+    ],
+    example:"A requested enhancement would delay launch but does not support the strategic goal the project was funded to achieve. The PM recommends staying aligned to the approved value objective.",
+    mindset:"PMI rewards prioritization that supports enterprise strategy and measurable value."
+  },
+  "Governance & Compliance":{
+    domain:"bizEnv",
+    lessonTitle:"Tailor delivery without ignoring the rules",
+    tldr:"The PM must balance speed and flexibility with governance, regulatory, and compliance requirements.",
+    keyPoints:[
+      "Governance defines decision rights, approvals, and accountability.",
+      "Compliance needs should be built into planning, not bolted on later.",
+      "Escalate when governance or regulatory constraints require formal action.",
+      "On the exam, compliance obligations usually override convenience."
+    ],
+    example:"An agile team wants to skip documentation to move faster, but the product is regulated. The PM adjusts the workflow so compliance deliverables are embedded in the process.",
+    mindset:"PMI favors tailoring within required governance boundaries, not bypassing them."
+  },
+  "Organizational Change Management":{
+    domain:"bizEnv",
+    lessonTitle:"Adoption matters as much as delivery",
+    tldr:"A project is not truly successful if the organization is not ready to use what was delivered.",
+    keyPoints:[
+      "Change impacts processes, roles, habits, and expectations.",
+      "Training and communication should match the groups affected.",
+      "Resistance is managed through engagement, support, and clarity.",
+      "On the exam, adoption planning often comes before declaring success."
+    ],
+    example:"A new system is technically ready, but users are anxious and unprepared. The PM coordinates training, feedback loops, and change champions before go-live.",
+    mindset:"PMI rewards planning for adoption and user readiness, not just technical completion."
+  },
+  "Portfolio & Program Context":{
+    domain:"bizEnv",
+    lessonTitle:"Projects do not operate in isolation",
+    tldr:"The PM should understand how their project connects to broader program and portfolio priorities.",
+    keyPoints:[
+      "Dependencies across projects can affect scope, schedule, and risk.",
+      "Portfolio priorities influence resource decisions and sequencing.",
+      "Escalation may be appropriate when cross-project tradeoffs are needed.",
+      "On the exam, context matters when choosing the best next action."
+    ],
+    example:"A shared resource is reassigned because another strategic project is in crisis. The PM assesses the impact on dependencies and works through governance to re-plan priorities.",
+    mindset:"PMI likes decisions that account for the bigger organizational system, not just the single project."
+  }
+};
+
+function shuffle(arr){
+  return [...arr].sort(()=>Math.random()-.5);
+}
+function sample(arr, count=1){
+  return shuffle(arr).slice(0,count);
+}
+function getTopicMeta(topicName){
+  return TOPIC_DETAILS[topicName] || {
+    domain:"process",
+    lessonTitle:topicName,
+    tldr:`This lesson focuses on ${topicName} and how to apply PMI-style decision making.`,
+    keyPoints:[
+      `Understand the purpose of ${topicName} before choosing a response.`,
+      `Use data, collaboration, and process discipline when deciding next steps.`,
+      `Tailor communication and delivery based on context and stakeholders.`,
+      `On the exam, choose the answer that is proactive and value-focused.`
+    ],
+    example:`A project manager uses ${topicName} concepts to clarify the situation, assess options, and choose the next action that protects project value.`,
+    mindset:"PMI usually prefers proactive analysis, direct communication, collaboration, and documented process over reactive shortcuts."
+  };
+}
+function toChoice(letter, text){ return `${letter}. ${text}`; }
+
+function buildWrongAnswers(correctLetter, explanations){
+  const result={};
+  ["A","B","C","D"].forEach((letter, idx)=>{
+    if(letter!==correctLetter) result[letter]=explanations[idx] || "This option skips a better first step for the scenario.";
+  });
+  return result;
+}
+
+function questionTemplates(topicName){
+  const meta=getTopicMeta(topicName);
+  const domain=meta.domain;
+  const templates=[
+    () => ({
+      domain,
+      topic: topicName,
+      difficulty: "Medium",
+      q: `During a project, an early warning sign appears related to ${topicName}. What should the project manager do NEXT?`,
+      choices: [
+        toChoice("A","Assess the situation, gather the relevant facts, and update the appropriate project artifact before taking broader action"),
+        toChoice("B","Immediately escalate the concern to the sponsor and request a decision"),
+        toChoice("C","Tell the team to continue as planned until there is more visible impact"),
+        toChoice("D","Implement a workaround without documenting the issue to save time")
+      ],
+      correct: "A",
+      whyCorrect: `This is the best first step because PMP questions usually reward proactive assessment, documentation, and an informed response before escalation. In ${topicName}, the PM should understand the situation and use the right process artifact.`,
+      trap: "Jumping to escalation or action before understanding the issue.",
+      wrongAnswers: {
+        B:"Escalation may be needed later, but it is usually not the first move unless the PM lacks authority or there is an urgent governance issue.",
+        C:"Waiting passively increases the risk that the situation worsens.",
+        D:"Undocumented workarounds create control, quality, and traceability problems."
+      }
+    }),
+    () => ({
+      domain,
+      topic: topicName,
+      difficulty: "Hard",
+      q: `A stakeholder is pressuring the project manager for a quick answer, but the team has raised concerns connected to ${topicName}. What is the BEST action?`,
+      choices: [
+        toChoice("A","Meet with the team and stakeholder, clarify the concern, and align on the best path forward"),
+        toChoice("B","Approve the stakeholder request to preserve the relationship"),
+        toChoice("C","Reject the request because the team is uncomfortable with it"),
+        toChoice("D","Delay the decision until the next status meeting")
+      ],
+      correct: "A",
+      whyCorrect: `The strongest PMP response is collaborative and fact-based. The PM should first clarify the concern and align the right people before deciding. That approach fits ${topicName} and protects both value and relationships.`,
+      trap: "Assuming speed or authority is more important than understanding and alignment.",
+      wrongAnswers: {
+        B:"Saying yes too quickly can create downstream risk or bypass the right process.",
+        C:"A flat rejection without clarification or engagement is too rigid.",
+        D:"Delaying without action increases uncertainty and often makes the issue worse."
+      }
+    }),
+    () => ({
+      domain,
+      topic: topicName,
+      difficulty: "Exam-level",
+      q: `A project has competing priorities, limited time, and a decision involving ${topicName}. The sponsor wants immediate movement, but the best PMP response should balance value, process, and people. What should the project manager do FIRST?`,
+      choices: [
+        toChoice("A","Analyze impact, engage the affected parties, and use the appropriate project process before committing"),
+        toChoice("B","Direct the team to execute the sponsor's request immediately"),
+        toChoice("C","Escalate to governance without attempting to clarify the issue"),
+        toChoice("D","Ask the team to vote on the best option and proceed with the majority choice")
+      ],
+      correct: "A",
+      whyCorrect: `This is the best first action because it balances stakeholder needs, project process, and decision quality. PMI usually rewards analysis and targeted engagement before commitment, especially in questions involving ${topicName}.`,
+      trap: "Confusing urgency with permission to skip analysis or process.",
+      wrongAnswers: {
+        B:"The PM should not commit work immediately without understanding impact and process implications.",
+        C:"Escalation may happen later, but the PM should normally clarify and assess first.",
+        D:"Team input can help, but voting is not the best first step for governance or project decisions."
+      }
+    }),
+  ];
+  return templates;
+}
+
+function buildQuestion(topicName, difficultyHint){
+  const qs = questionTemplates(topicName).map(fn=>fn());
+  let preferred = qs.find(q=>q.difficulty===difficultyHint);
+  if(!preferred) preferred = qs[Math.floor(Math.random()*qs.length)];
+  return preferred;
+}
+
+function weightedDomainTopics(profile){
+  const weakSet = new Set(profile.weakAreas || []);
+  const sorted = TOPICS.map(t=>({
+    ...t,
+    weight: weakSet.has(t.name) ? 3 : 1
+  }));
+  const bucket=[];
+  sorted.forEach(t=>{
+    for(let i=0;i<t.weight;i++) bucket.push(t);
+  });
+  return bucket;
+}
+
+function makeLesson(topicName){
+  const meta=getTopicMeta(topicName);
+  return {
+    title: meta.lessonTitle,
+    tldr: meta.tldr,
+    keyPoints: meta.keyPoints,
+    example: meta.example,
+    pmMindset: meta.mindset,
+    focusTopic: topicName
+  };
+}
+
+function difficultyForIndex(idx, total, base){
+  if(base.includes("Easy")) return idx < Math.ceil(total*0.4) ? "Medium" : "Hard";
+  if(base.includes("Exam-level")) return idx < Math.ceil(total*0.25) ? "Hard" : "Exam-level";
+  if(base==="Hard") return idx < Math.ceil(total*0.3) ? "Medium" : "Hard";
+  return idx < Math.ceil(total*0.5) ? "Medium" : "Hard";
+}
+
 async function generateSession(profile,intensity){
+  await new Promise(r=>setTimeout(r,350));
   const day=getDay(profile.startDate);
   const topics=selectTopics(profile,3);
   const qCount=intensity==="Light"?10:intensity==="Intensive"?22:14;
   const avgDomain=(profile.domains.people+profile.domains.process+profile.domains.bizEnv)/3;
   const diff=getDifficultyFromDay(day,avgDomain);
-  const weak=profile.weakAreas.length>0?`User struggles with: ${profile.weakAreas.join(", ")}.`:"";
-  const strong=profile.strongAreas.length>0?`User performs well on: ${profile.strongAreas.join(", ")}.`:"";
+  const domainPool=weightedDomainTopics(profile);
 
-  const prompt=`You are an expert PMP exam coach building a ${intensity} study session for Day ${day}/60.
+  const questions=[];
+  for(let i=0;i<qCount;i++){
+    const preferredTopic = i < topics.length ? topics[i] : domainPool[Math.floor(Math.random()*domainPool.length)].name;
+    const difficultyHint=difficultyForIndex(i,qCount,diff);
+    questions.push(buildQuestion(preferredTopic,difficultyHint));
+  }
 
-USER PROFILE:
-- Readiness: ${profile.readiness}%
-- Domain scores: People ${profile.domains.people}%, Process ${profile.domains.process}%, Business Env ${profile.domains.bizEnv}%
-- ${weak} ${strong}
-- Total questions answered: ${profile.totalAnswered}
-- Session topics to focus on: ${topics.join(", ")}
-
-PMBOK 8 context: PMBOK 8 (Nov 2025) includes 6 principles, 7 performance domains, 5 focus areas, 40 processes. New exam (July 2026) has: People ~42%, Process ~50%, Business Environment ~8% (rising to ~26%).
-
-Generate a JSON session response. Requirements:
-- Micro lesson: focus on the first topic listed, practical and exam-focused
-- ${qCount} questions total: mix all 3 ECO domains (proportional to their exam weights)
-- Difficulty: ${diff}
-- 50%+ of questions must be situational ("What should the PM do NEXT?")
-- Each question must have plausible wrong answers (not obviously wrong)
-- Include PMI mindset traps in explanations
-- DO NOT repeat concepts from recent session (lastLesson: ${profile.lastLesson||"none"})
-
-Respond ONLY with valid JSON, no markdown:
-{
-  "lesson": {
-    "title": "...",
-    "tldr": "one sentence core idea",
-    "keyPoints": ["point 1","point 2","point 3","point 4"],
-    "example": "real-world scenario applying this concept",
-    "pmMindset": "the PMI thinking pattern this reinforces",
-    "focusTopic": "the topic this lesson covers"
-  },
-  "questions": [
-    {
-      "domain": "people|process|bizEnv",
-      "topic": "specific topic name",
-      "difficulty": "Easy|Medium|Hard|Exam-level",
-      "q": "full scenario question",
-      "choices": ["A. ...","B. ...","C. ...","D. ..."],
-      "correct": "A",
-      "whyCorrect": "why A is correct, PMBOK 8 reference",
-      "trap": "the specific trap/pitfall this question tests",
-      "wrongAnswers": {"B":"why wrong","C":"why wrong","D":"why wrong"}
-    }
-  ]
-}`;
-
-  const res=await window.fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:4000,
-      messages:[{role:"user",content:prompt}]})
-  });
-  const data=await res.json();
-  const txt=data.content?.find(b=>b.type==="text")?.text||"";
-  return JSON.parse(txt.replace(/```json|```/g,"").trim());
+  return {
+    lesson: makeLesson(topics[0]),
+    questions
+  };
 }
 
 async function generateSummary(score,domainScores,weakTopics,intensity,day){
-  const prompt=`You are a PMP coach. Session complete on Day ${day}/60.
+  await new Promise(r=>setTimeout(r,200));
+  const strengths=[];
+  const improvements=[];
+  const entries=Object.entries(domainScores||{}).filter(([,v])=>typeof v==="number");
+  const best=entries.sort((a,b)=>b[1]-a[1])[0];
+  const worst=entries.sort((a,b)=>a[1]-b[1])[0];
 
-Results: ${score}% score, Domain breakdown: ${JSON.stringify(domainScores)}, Weak topics this session: ${weakTopics.join(", ")||"none identified"}
+  if(score>=80){
+    strengths.push("You are starting to recognize the PMI-style next step instead of reacting too quickly.");
+    strengths.push("Your choices showed good discipline around analysis, communication, and process.");
+  }else if(score>=65){
+    strengths.push("You are building a solid decision pattern and your instincts are getting closer to PMP logic.");
+    strengths.push("You avoided several common traps like escalating too early or acting without enough information.");
+  }else{
+    strengths.push("You are getting valuable reps, which matters a lot in PMP prep.");
+    strengths.push("You are starting to see where PMI logic differs from real-world shortcuts.");
+  }
 
-Generate a brief coaching summary as JSON:
-{
-  "headline": "one motivating sentence about their performance",
-  "strengths": ["2 specific things they did well"],
-  "improvements": ["2-3 specific areas to work on with actionable advice"],
-  "nextFocus": "the single most important topic to study next",
-  "mindsetCoach": "one PMI mindset tip reinforcing exam thinking patterns",
-  "readinessImpact": "brief note on how this session moved their readiness"
-}
-Respond ONLY with valid JSON.`;
+  if(best){
+    strengths.push(`Your strongest domain this session was ${DL[best[0]] || best[0]} at ${best[1]}%.`);
+  }
 
-  const res=await window.fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:600,
-      messages:[{role:"user",content:prompt}]})
-  });
-  const data=await res.json();
-  const txt=data.content?.find(b=>b.type==="text")?.text||"";
-  return JSON.parse(txt.replace(/```json|```/g,"").trim());
+  if(worst){
+    improvements.push(`Spend extra time on ${DL[worst[0]] || worst[0]} questions. Slow down and ask: what should the PM do first, before escalating or implementing?`);
+  }
+  if(weakTopics?.length){
+    improvements.push(`Review ${weakTopics[0]} next. That topic showed up as a recurring gap in this session.`);
+  }
+  improvements.push("When two answer choices seem plausible, choose the one that is more proactive, collaborative, and process-aware.");
+
+  const nextFocus = weakTopics?.[0] || (worst ? (DL[worst[0]] || worst[0]) : "Situational process questions");
+  const readinessImpact =
+    score>=75
+      ? "This session likely moved your readiness upward because you showed stronger judgment and consistency."
+      : score>=60
+      ? "This session helped by exposing your weak spots while reinforcing several strong PMP habits."
+      : "This session still improved your readiness because missed questions created useful feedback and flashcards.";
+
+  return {
+    headline:
+      score>=80
+        ? `Strong work on Day ${day}. You are thinking more like the exam wants you to think.`
+        : score>=65
+        ? `Good progress on Day ${day}. You are getting closer, but a few decision traps still need tightening.`
+        : `This was a useful practice session on Day ${day}. The score is less important than what it exposed.`,
+    strengths: strengths.slice(0,3),
+    improvements: improvements.slice(0,3),
+    nextFocus,
+    mindsetCoach:"Before choosing an answer, ask yourself which option shows the project manager understanding the issue, engaging the right people, and following the right level of process.",
+    readinessImpact
+  };
 }
 
 async function generateExamBatch(profile,batchNum,batchSize,examType){
-  const day=getDay(profile.startDate);
-  const isWeekly=examType==="weekly";
-  const prompt=`You are a PMP exam generator. Generate ${batchSize} PMP exam questions (batch ${batchNum}) for a ${isWeekly?"60-question weekly":"180-question full"} simulation.
+  await new Promise(r=>setTimeout(r,250));
+  const domainTargets = [
+    ...Array(Math.round(batchSize*0.42)).fill("people"),
+    ...Array(Math.round(batchSize*0.50)).fill("process"),
+    ...Array(batchSize - Math.round(batchSize*0.42) - Math.round(batchSize*0.50)).fill("bizEnv")
+  ];
+  const poolByDomain = {
+    people: TOPICS.filter(t=>t.domain==="people"),
+    process: TOPICS.filter(t=>t.domain==="process"),
+    bizEnv: TOPICS.filter(t=>t.domain==="bizEnv"),
+  };
 
-User Day: ${day}/60. Readiness: ${profile.readiness}%. Weak areas: ${profile.weakAreas.join(", ")||"none"}.
-
-Domain distribution per batch: People ~42%, Process ~50%, Business Env ~8%.
-Difficulty: mix of Medium, Hard, and Exam-level. All must be scenario-based situational questions.
-PMBOK 8 aligned. July 2026 exam format.
-
-Respond ONLY with valid JSON array (no wrapper object):
-[{
-  "domain":"people|process|bizEnv",
-  "topic":"specific topic",
-  "difficulty":"Medium|Hard|Exam-level",
-  "q":"full scenario question",
-  "choices":["A. ...","B. ...","C. ...","D. ..."],
-  "correct":"A",
-  "whyCorrect":"explanation",
-  "trap":"the trap tested",
-  "wrongAnswers":{"B":"why wrong","C":"why wrong","D":"why wrong"}
-}]`;
-
-  const res=await window.fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:3500,
-      messages:[{role:"user",content:prompt}]})
+  return shuffle(domainTargets).map((dom, idx)=>{
+    const topic = sample(poolByDomain[dom],1)[0]?.name || sample(TOPICS,1)[0].name;
+    const difficultyHint = idx < Math.ceil(batchSize*0.35) ? "Hard" : "Exam-level";
+    return buildQuestion(topic, difficultyHint);
   });
-  const data=await res.json();
-  const txt=data.content?.find(b=>b.type==="text")?.text||"";
-  return JSON.parse(txt.replace(/```json|```/g,"").trim());
 }
 
 // ─── UI COMPONENTS ────────────────────────────────────────────────────────────
@@ -276,7 +713,7 @@ function Badge({children,color=C.gold,small=false}){
 function Btn({children,onClick,v="primary",full=false,disabled=false,small=false,s={}}){
   const base={fontFamily:F.b,fontWeight:600,fontSize:small?12:14,cursor:disabled?"not-allowed":"pointer",
     border:"none",borderRadius:8,padding:small?"8px 14px":"11px 20px",transition:"all .2s",
-    opacity:disabled?.45:1,width:full?"100%":"auto",...s};
+    opacity:disabled ? 0.45 : 1,width:full?"100%":"auto",...s};
   const vs={primary:{background:`linear-gradient(135deg,${C.gold},#b8821a)`,color:"#060d1a"},
     sec:{background:"transparent",color:C.text,border:`1px solid ${C.border}`},
     ghost:{background:"transparent",color:C.muted,padding:small?"6px 10px":"8px 12px"},
