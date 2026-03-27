@@ -51,6 +51,8 @@ function freshProfile(intensity="Standard"){
     sessionHistory:[],// last 10 summaries
     flashcards:[],// {q,a,topic,ease:2.5,interval:1,nextReview}
     totalAnswered:0,
+    totalUniqueAnswered:0,
+    seenQuestionKeys:[],
     weeklyExams:[],// {day,score,domains}
     fullExams:[],// {day,score,domains,passProb}
     preferredIntensity:intensity,
@@ -62,10 +64,19 @@ function getDay(startDate){
   const d=Math.floor((new Date()-new Date(startDate))/(86400000))+1;
   return Math.min(60,Math.max(1,d));
 }
+
+function questionKey(q){
+  return `${q.domain||"process"}|${q.topic||"General"}|${q.q}|${(q.choices||[]).join("||")}`;
+}
+function nextFullExamDay(day, fullExams=[]){
+  const schedule=[25,40,55];
+  return schedule.find(d=>day>=d && !fullExams.find(e=>e.day===d)) || null;
+}
+
 function calcReadiness(p){
   if(p.totalAnswered<5)return p.totalAnswered*3;
   const avg=(p.domains.people+p.domains.process+p.domains.bizEnv)/3;
-  const vol=Math.min(p.totalAnswered/400,1)*15;
+  const vol=Math.min((p.totalUniqueAnswered||p.totalAnswered)/400,1)*15;
   return Math.round(Math.min(avg*.82+vol,100));
 }
 function getWeakAreas(topicAcc){
@@ -82,6 +93,7 @@ function getStrongAreas(topicAcc){
 }
 function updateProfile(profile,answers,questions){
   const p={...profile,topicAcc:{...profile.topicAcc}};
+  const seenSet=new Set(profile.seenQuestionKeys||[]);
   let dc={people:0,process:0,bizEnv:0},dt={people:0,process:0,bizEnv:0};
   answers.forEach((a,i)=>{
     const q=questions[i];if(!q)return;
@@ -101,7 +113,11 @@ function updateProfile(profile,answers,questions){
       p.domains[d]=p.domains[d]===0?sessionScore:Math.round(p.domains[d]*.7+sessionScore*.3);
     }
   });
-  p.totalAnswered+=answers.filter(a=>a!==null).length;
+  const answeredQuestions=questions.filter((_,i)=>answers[i]!==null);
+  p.totalAnswered+=answeredQuestions.length;
+  answeredQuestions.forEach(q=>seenSet.add(questionKey(q)));
+  p.seenQuestionKeys=[...seenSet].slice(-1000);
+  p.totalUniqueAnswered=seenSet.size;
   p.weakAreas=getWeakAreas(p.topicAcc);
   p.strongAreas=getStrongAreas(p.topicAcc);
   p.readiness=calcReadiness(p);
@@ -818,7 +834,7 @@ function Onboarding({onStart}){
       </div>
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 18px",marginBottom:24}}>
         <div style={{fontSize:11,color:C.gold,fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>WHAT YOU GET</div>
-        {["AI-generated lessons tailored to your gaps","Adaptive questions — harder when you're strong","Spaced repetition flashcards from your mistakes","Weekly 60-question exam simulations","Full 180-question mock exam at Day 25 & 50","Daily readiness score tracking all 3 ECO domains"].map((item,i)=>(
+        {["AI-generated lessons tailored to your gaps","Adaptive questions — harder when you're strong","Spaced repetition flashcards from your mistakes","Weekly 60-question exam simulations","Full 180-question mock exams on Days 25, 40 & 55","400 unique-question tracker + daily readiness across all 3 ECO domains"].map((item,i)=>(
           <div key={i} style={{display:"flex",gap:8,marginBottom:6}}>
             <span style={{color:C.ok,flexShrink:0}}>✓</span>
             <span style={{fontSize:13,color:C.muted}}>{item}</span>
@@ -837,8 +853,10 @@ function Dashboard({profile,onSession,onFlashcards,onExam}){
   const day=getDay(profile.startDate);
   const daysLeft=61-day;
   const recent=profile.sessionHistory.slice(-3).reverse();
-  const examAvail=day>=25;
+  const nextFullDay=nextFullExamDay(day, profile.fullExams);
+  const examAvail=!!nextFullDay;
   const weeklyDue=day>0&&day%7===0&&!profile.weeklyExams.find(e=>e.day===day);
+  const uniquePct=Math.min(100, Math.round(((profile.totalUniqueAnswered||0)/400)*100));
 
   return(
     <div className="fi" style={{padding:"20px 20px 80px"}}>
@@ -891,6 +909,18 @@ function Dashboard({profile,onSession,onFlashcards,onExam}){
         )}
       </div>
 
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:"16px 18px",marginBottom:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <div>
+            <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:"0.1em",textTransform:"uppercase"}}>Question Goal</div>
+            <div style={{fontFamily:F.d,fontSize:22,color:C.text}}>{profile.totalUniqueAnswered||0} / 400</div>
+          </div>
+          <Badge color={(profile.totalUniqueAnswered||0)>=400?C.ok:C.gold}>{(profile.totalUniqueAnswered||0)>=400?"Goal Hit":"Keep Going"}</Badge>
+        </div>
+        <PBar val={profile.totalUniqueAnswered||0} max={400} color={(profile.totalUniqueAnswered||0)>=400?C.ok:C.gold}/>
+        <div style={{fontSize:12,color:C.muted,marginTop:8}}>This app tracks unique question prompts so you can make sure you complete at least 400 different questions before test day.</div>
+      </div>
+
       {/* Alerts */}
       {weeklyDue&&(
         <div style={{background:C.gold+"18",border:`1px solid ${C.gold}55`,borderRadius:12,padding:"12px 16px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -899,6 +929,15 @@ function Dashboard({profile,onSession,onFlashcards,onExam}){
             <div style={{fontSize:12,color:C.muted,marginTop:2}}>60-question simulation to benchmark progress</div>
           </div>
           <Btn small v="primary" onClick={()=>onExam("weekly")}>Take Now</Btn>
+        </div>
+      )}
+      {nextFullDay&&(
+        <div style={{background:C.err+"14",border:`1px solid ${C.err}44`,borderRadius:12,padding:"12px 16px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontSize:12,fontWeight:600,color:C.err}}>🎯 Full Exam Due — Day {nextFullDay}</div>
+            <div style={{fontSize:12,color:C.muted,marginTop:2}}>180-question mock exam scheduled for Days 25, 40, and 55</div>
+          </div>
+          <Btn small v="danger" onClick={()=>onExam("full")}>Start Full Exam</Btn>
         </div>
       )}
 
@@ -943,7 +982,7 @@ function Dashboard({profile,onSession,onFlashcards,onExam}){
         <button onClick={()=>onExam("full")} disabled={!examAvail} style={{background:C.card,border:`1px solid ${examAvail?C.border:C.border+"55"}`,borderRadius:10,padding:"12px 14px",cursor:examAvail?"pointer":"not-allowed",textAlign:"left",fontFamily:F.b,opacity:examAvail?1:.5}}>
           <div style={{fontSize:18,marginBottom:4}}>🎯</div>
           <div style={{fontSize:13,fontWeight:600,color:C.text}}>Full Exam Sim</div>
-          <div style={{fontSize:11,color:C.muted}}>{examAvail?"180 questions":"Unlocks Day 25"}</div>
+          <div style={{fontSize:11,color:C.muted}}>{examAvail?`180 questions · Due Day ${nextFullDay}`:"Unlocks Day 25"}</div>
         </button>
       </div>
 
@@ -968,12 +1007,21 @@ function Dashboard({profile,onSession,onFlashcards,onExam}){
       )}
 
       {/* Exam History */}
-      {profile.weeklyExams.length>0&&(
+      {(profile.weeklyExams.length>0||profile.fullExams.length>0)&&(
         <Section title="Exam History">
           {profile.weeklyExams.slice(-3).reverse().map((e,i)=>(
-            <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div key={`w-${i}`} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div style={{fontSize:12,color:C.muted}}>Weekly Exam · Day {e.day}</div>
               <div style={{fontSize:15,fontWeight:700,color:e.score>=70?C.ok:e.score>=50?C.gold:C.err}}>{e.score}%</div>
+            </div>
+          ))}
+          {profile.fullExams.slice(-3).reverse().map((e,i)=>(
+            <div key={`f-${i}`} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{fontSize:12,color:C.muted}}>Full Exam · Day {e.day}</div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:11,color:C.muted}}>Pass chance {e.passProb||0}%</span>
+                <div style={{fontSize:15,fontWeight:700,color:e.score>=70?C.ok:e.score>=50?C.gold:C.err}}>{e.score}%</div>
+              </div>
             </div>
           ))}
         </Section>
@@ -1437,7 +1485,7 @@ function ExamSim({profile,examType,onComplete,onBack}){
       const passProb=score>=65?Math.round(50+score*.5):Math.round(score*.8);
       setResults({score,correct,total:newAnswers.length,domScores,passProb});
       setPhase("results");
-      onComplete({score,domScores,passProb,examType,day:getDay(profile.startDate)});
+      onComplete({score,domScores,passProb,examType,day:getDay(profile.startDate),total:newAnswers.length,questions:questions.slice(0,newAnswers.length),answers:newAnswers});
     }
   };
 
@@ -1457,6 +1505,7 @@ function ExamSim({profile,examType,onComplete,onBack}){
           `${targetQ} PMP-style situational questions`,
           "Mixed difficulty: Medium, Hard, and Exam-level",
           "All three ECO domains: People, Process, Business Env",
+          isWeekly?"Weekly cadence check":"Scheduled full sims on Days 25, 40, and 55",
           "Immediate explanation after each question",
           `Domain-level score breakdown at completion`,
           isWeekly?"~60 min":"~180 min estimated",
@@ -1688,6 +1737,12 @@ export default function App(){
     }else{
       updatedProfile.fullExams=[...updatedProfile.fullExams,examResult];
     }
+    // Count exam questions toward study volume + unique target
+    const seenSet=new Set(updatedProfile.seenQuestionKeys||[]);
+    (examResult.questions||[]).forEach(q=>seenSet.add(questionKey(q)));
+    updatedProfile.seenQuestionKeys=[...seenSet].slice(-1000);
+    updatedProfile.totalUniqueAnswered=seenSet.size;
+    updatedProfile.totalAnswered=(updatedProfile.totalAnswered||0)+(examResult.total||0);
     // Also update domain scores
     Object.entries(examResult.domScores).forEach(([dom,score])=>{
       if(score>0)updatedProfile.domains[dom]=Math.round(updatedProfile.domains[dom]*.6+score*.4);
