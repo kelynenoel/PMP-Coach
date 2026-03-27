@@ -890,39 +890,209 @@ function dueFullExam(day, taken) {
   return required.find((d) => day >= d && !taken.includes(d)) || null;
 }
 
-function ProgressBar({ value }) {
+
+function ProgressBar({ value, gradient = "linear-gradient(90deg, #06b6d4 0%, #8b5cf6 55%, #ec4899 100%)" }) {
   return (
-    <div style={{ background: "#e5e7eb", borderRadius: 999, overflow: "hidden", height: 10 }}>
-      <div style={{ width: `${Math.min(100, value)}%`, height: "100%", background: "#0f766e" }} />
+    <div
+      style={{
+        background: "rgba(255,255,255,0.55)",
+        borderRadius: 999,
+        overflow: "hidden",
+        height: 12,
+        border: "1px solid rgba(148,163,184,0.18)",
+        boxShadow: "inset 0 1px 2px rgba(15,23,42,0.06)"
+      }}
+    >
+      <div
+        style={{
+          width: `${Math.min(100, value)}%`,
+          height: "100%",
+          background: gradient,
+          borderRadius: 999,
+          boxShadow: "0 6px 16px rgba(14,165,233,0.18)"
+        }}
+      />
     </div>
   );
 }
 
-function Card({ children }) {
+function Badge({ children, tone = "default" }) {
+  const tones = {
+    default: { bg: "rgba(255,255,255,0.68)", color: "#334155", border: "rgba(148,163,184,0.24)" },
+    cyan: { bg: "rgba(34,211,238,0.16)", color: "#155e75", border: "rgba(34,211,238,0.28)" },
+    violet: { bg: "rgba(167,139,250,0.18)", color: "#5b21b6", border: "rgba(139,92,246,0.25)" },
+    pink: { bg: "rgba(244,114,182,0.18)", color: "#9d174d", border: "rgba(244,114,182,0.26)" },
+    amber: { bg: "rgba(251,191,36,0.2)", color: "#92400e", border: "rgba(251,191,36,0.3)" },
+    emerald: { bg: "rgba(52,211,153,0.18)", color: "#065f46", border: "rgba(52,211,153,0.28)" },
+    slate: { bg: "rgba(226,232,240,0.7)", color: "#334155", border: "rgba(148,163,184,0.22)" },
+    rose: { bg: "rgba(251,113,133,0.16)", color: "#9f1239", border: "rgba(251,113,133,0.26)" },
+  };
+  const t = tones[tone] || tones.default;
   return (
-    <div style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 16, background: "#fff", boxShadow: "0 1px 2px rgba(0,0,0,0.04)" }}>
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "6px 10px",
+        borderRadius: 999,
+        fontSize: 12,
+        fontWeight: 700,
+        background: t.bg,
+        color: t.color,
+        border: `1px solid ${t.border}`,
+        backdropFilter: "blur(10px)",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function Card({ children, tone = "default", padding = 18 }) {
+  const tones = {
+    default: {
+      background: "linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,250,252,0.92))",
+      border: "1px solid rgba(226,232,240,0.9)",
+    },
+    hero: {
+      background: "linear-gradient(135deg, rgba(14,165,233,0.18), rgba(139,92,246,0.18) 52%, rgba(244,114,182,0.18))",
+      border: "1px solid rgba(255,255,255,0.55)",
+    },
+    cyan: {
+      background: "linear-gradient(135deg, rgba(236,254,255,0.94), rgba(224,242,254,0.92))",
+      border: "1px solid rgba(34,211,238,0.22)",
+    },
+    violet: {
+      background: "linear-gradient(135deg, rgba(245,243,255,0.95), rgba(237,233,254,0.92))",
+      border: "1px solid rgba(139,92,246,0.22)",
+    },
+    pink: {
+      background: "linear-gradient(135deg, rgba(253,242,248,0.96), rgba(252,231,243,0.92))",
+      border: "1px solid rgba(244,114,182,0.22)",
+    },
+    amber: {
+      background: "linear-gradient(135deg, rgba(255,251,235,0.96), rgba(254,243,199,0.9))",
+      border: "1px solid rgba(245,158,11,0.22)",
+    },
+    emerald: {
+      background: "linear-gradient(135deg, rgba(236,253,245,0.96), rgba(209,250,229,0.9))",
+      border: "1px solid rgba(16,185,129,0.22)",
+    },
+    slate: {
+      background: "linear-gradient(135deg, rgba(248,250,252,0.96), rgba(241,245,249,0.92))",
+      border: "1px solid rgba(148,163,184,0.2)",
+    },
+    dark: {
+      background: "linear-gradient(135deg, rgba(15,23,42,0.96), rgba(30,41,59,0.96))",
+      border: "1px solid rgba(99,102,241,0.22)",
+    },
+  };
+  const t = tones[tone] || tones.default;
+  return (
+    <div
+      style={{
+        borderRadius: 24,
+        padding,
+        background: t.background,
+        border: t.border,
+        boxShadow: "0 16px 44px rgba(15,23,42,0.08)",
+        backdropFilter: "blur(14px)",
+      }}
+    >
       {children}
     </div>
   );
 }
 
-function Button({ children, onClick, disabled = false }) {
+function Button({ children, onClick, disabled = false, variant = "primary" }) {
+  const variants = {
+    primary: {
+      background: "linear-gradient(135deg, #06b6d4, #8b5cf6 62%, #ec4899)",
+      color: "#fff",
+      border: "1px solid rgba(255,255,255,0.18)",
+      shadow: "0 14px 30px rgba(139,92,246,0.28)",
+    },
+    secondary: {
+      background: "linear-gradient(135deg, #0f172a, #334155)",
+      color: "#fff",
+      border: "1px solid rgba(255,255,255,0.16)",
+      shadow: "0 14px 30px rgba(15,23,42,0.2)",
+    },
+    soft: {
+      background: "rgba(255,255,255,0.75)",
+      color: "#334155",
+      border: "1px solid rgba(148,163,184,0.26)",
+      shadow: "0 10px 24px rgba(15,23,42,0.08)",
+    },
+    success: {
+      background: "linear-gradient(135deg, #10b981, #14b8a6)",
+      color: "#fff",
+      border: "1px solid rgba(255,255,255,0.18)",
+      shadow: "0 14px 30px rgba(20,184,166,0.22)",
+    },
+  };
+  const v = variants[variant] || variants.primary;
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       style={{
-        padding: "10px 14px",
-        borderRadius: 10,
-        border: "1px solid #0f766e",
-        background: disabled ? "#d1d5db" : "#0f766e",
-        color: "#fff",
+        padding: "12px 16px",
+        borderRadius: 16,
+        border: v.border,
+        background: disabled ? "linear-gradient(135deg, #cbd5e1, #e2e8f0)" : v.background,
+        color: disabled ? "#64748b" : v.color,
         cursor: disabled ? "not-allowed" : "pointer",
-        fontWeight: 600,
+        fontWeight: 800,
+        fontSize: 14,
+        letterSpacing: 0.1,
+        boxShadow: disabled ? "none" : v.shadow,
+        transform: "translateZ(0)",
       }}
     >
       {children}
     </button>
+  );
+}
+
+function StatCard({ label, value, subtitle, tone = "default", progress, icon }) {
+  return (
+    <Card tone={tone}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+        <div>
+          <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8 }}>{label}</div>
+          <div style={{ fontSize: 30, fontWeight: 900, marginTop: 8, lineHeight: 1 }}>{value}</div>
+          {subtitle ? <div style={{ marginTop: 8, color: "#475569", fontSize: 13 }}>{subtitle}</div> : null}
+        </div>
+        <div
+          style={{
+            minWidth: 44,
+            height: 44,
+            borderRadius: 16,
+            display: "grid",
+            placeItems: "center",
+            fontSize: 20,
+            background: "rgba(255,255,255,0.68)",
+            border: "1px solid rgba(255,255,255,0.78)",
+            boxShadow: "0 8px 20px rgba(15,23,42,0.08)"
+          }}
+        >
+          {icon}
+        </div>
+      </div>
+      {typeof progress === "number" ? <div style={{ marginTop: 14 }}><ProgressBar value={progress} /></div> : null}
+    </Card>
+  );
+}
+
+function SectionHeader({ eyebrow, title, blurb, tone = "cyan" }) {
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <Badge tone={tone}>{eyebrow}</Badge>
+      <div style={{ fontSize: 24, fontWeight: 900, lineHeight: 1.1 }}>{title}</div>
+      {blurb ? <div style={{ color: "#475569", lineHeight: 1.55 }}>{blurb}</div> : null}
+    </div>
   );
 }
 
@@ -943,6 +1113,7 @@ export default function App() {
 
   const takenFullDays = profile.examHistory.filter((e) => e.kind === "full").map((e) => e.day);
   const dueExamDay = dueFullExam(profile.day, takenFullDays);
+  const dueFlashcardsToday = profile.flashcards.filter((c) => c.nextReview <= TODAY() || !c.seen).slice(0, 15).length;
 
   const openDaily = () => {
     setSession(buildDailySession(profile, bank));
@@ -1050,105 +1221,194 @@ export default function App() {
     }
   };
 
-  const layout = { maxWidth: 1100, margin: "0 auto", padding: 20, fontFamily: "Inter, Arial, sans-serif", background: "#f8fafc", minHeight: "100vh", color: "#111827" };
+  const layout = {
+    maxWidth: 1200,
+    margin: "0 auto",
+    padding: 20,
+    fontFamily: "Inter, ui-sans-serif, system-ui, Arial, sans-serif",
+    minHeight: "100vh",
+    color: "#0f172a",
+    background:
+      "radial-gradient(circle at top left, rgba(34,211,238,0.18), transparent 28%), radial-gradient(circle at top right, rgba(244,114,182,0.14), transparent 22%), linear-gradient(180deg, #f8fbff 0%, #f5f3ff 50%, #fff7ed 100%)",
+  };
 
   return (
     <div style={layout}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <div>
-          <h1 style={{ margin: 0 }}>PMP Coach</h1>
-          <div style={{ color: "#475569", marginTop: 6 }}>PMBOK + Agile Practice Guide aligned study system</div>
-        </div>
-        {screen !== "dashboard" && <Button onClick={() => setScreen("dashboard")}>Back to dashboard</Button>}
+      <div
+        style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 5,
+          marginBottom: 20,
+          paddingTop: 4,
+        }}
+      >
+        <Card tone="hero" padding={20}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Badge tone="violet">PMBOK + Agile</Badge>
+                <Badge tone="cyan">600-question bank</Badge>
+                <Badge tone="pink">App mode</Badge>
+              </div>
+              <div>
+                <h1 style={{ margin: 0, fontSize: 34, lineHeight: 1, fontWeight: 900 }}>PMP Coach</h1>
+                <div style={{ color: "#334155", marginTop: 8, maxWidth: 680, lineHeight: 1.55 }}>
+                  Your colorful study hub for daily lessons, better PMP-style questions, spaced-repetition flashcards, and full exam sims on Days 25, 40, and 55.
+                </div>
+              </div>
+            </div>
+            {screen !== "dashboard" && <Button onClick={() => setScreen("dashboard")} variant="secondary">Back to dashboard</Button>}
+          </div>
+        </Card>
       </div>
 
       {screen === "dashboard" && (
-        <div style={{ display: "grid", gap: 16 }}>
+        <div style={{ display: "grid", gap: 18 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
-            <Card>
-              <div style={{ color: "#64748b", fontSize: 13 }}>Current day</div>
-              <div style={{ fontSize: 28, fontWeight: 700 }}>{profile.day}</div>
+            <StatCard label="Current day" value={profile.day} subtitle={roadmapForDay(profile.day).focus} tone="cyan" icon="📅" />
+            <StatCard label="Readiness" value={`${profile.readiness}%`} subtitle="Weighted by unique questions + exam performance" tone="violet" progress={profile.readiness} icon="⚡" />
+            <StatCard label="Unique questions" value={`${profile.answeredIds.length} / 400`} subtitle="You are not done until the unique count climbs." tone="pink" progress={(profile.answeredIds.length / 400) * 100} icon="🎯" />
+            <StatCard label="Flashcards today" value={dueFlashcardsToday} subtitle="Capped at 15 so Day 1 does not feel ridiculous." tone="amber" icon="🧠" />
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
+            <Card tone="dark">
+              <SectionHeader
+                eyebrow="Today’s roadmap"
+                title={roadmapForDay(profile.day).title}
+                blurb={roadmapForDay(profile.day).lesson}
+                tone="cyan"
+              />
+              <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <Badge tone="emerald">Focus: {roadmapForDay(profile.day).focus}</Badge>
+                <Badge tone="slate">Exam sims: 25 • 40 • 55</Badge>
+                <Badge tone="pink">Daily cards capped at 15</Badge>
+              </div>
+              {dueExamDay && (
+                <div
+                  style={{
+                    marginTop: 16,
+                    padding: 14,
+                    borderRadius: 18,
+                    background: "rgba(251,191,36,0.16)",
+                    color: "#fef3c7",
+                    border: "1px solid rgba(251,191,36,0.24)",
+                    lineHeight: 1.5
+                  }}
+                >
+                  <strong style={{ color: "#fde68a" }}>Full exam due now.</strong> You’ve hit Day {dueExamDay}, so your next 180-question simulation is unlocked.
+                </div>
+              )}
             </Card>
-            <Card>
-              <div style={{ color: "#64748b", fontSize: 13 }}>Readiness</div>
-              <div style={{ fontSize: 28, fontWeight: 700 }}>{profile.readiness}%</div>
-              <ProgressBar value={profile.readiness} />
-            </Card>
-            <Card>
-              <div style={{ color: "#64748b", fontSize: 13 }}>Unique questions</div>
-              <div style={{ fontSize: 28, fontWeight: 700 }}>{profile.answeredIds.length} / 400</div>
-              <ProgressBar value={(profile.answeredIds.length / 400) * 100} />
-            </Card>
-            <Card>
-              <div style={{ color: "#64748b", fontSize: 13 }}>Flashcards due today</div>
-              <div style={{ fontSize: 28, fontWeight: 700 }}>
-                {profile.flashcards.filter((c) => c.nextReview <= TODAY() || !c.seen).slice(0, 15).length}
+
+            <Card tone="emerald">
+              <SectionHeader
+                eyebrow="Weak-topic spotlight"
+                title={profile.weakTopics.length ? profile.weakTopics.join(", ") : "Not enough answer data yet"}
+                blurb={profile.weakTopics.length ? "These topics are now driving more review pressure in the app." : "Once you answer more questions, this area will populate automatically."}
+                tone="emerald"
+              />
+              <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
+                <Badge tone="amber">Starter flashcards from Day 1</Badge>
+                <Badge tone="violet">Missed questions create new cards</Badge>
+                <Badge tone="cyan">Scenarios rotate by industry</Badge>
               </div>
             </Card>
           </div>
 
-          <Card>
-            <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>{roadmapForDay(profile.day).title}</div>
-            <div style={{ color: "#334155" }}>{roadmapForDay(profile.day).lesson}</div>
-            {dueExamDay && (
-              <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: "#fef3c7" }}>
-                Full exam due now: <strong>Day {dueExamDay}</strong>
+          <Card tone="default">
+            <div style={{ display: "grid", gap: 12 }}>
+              <SectionHeader
+                eyebrow="Choose your mode"
+                title="Today’s study actions"
+                blurb="Same logic, better styling. The structure stays the same — the app just feels more alive again."
+                tone="violet"
+              />
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                <Button onClick={openDaily}>Generate daily session</Button>
+                <Button onClick={openFlashcards} variant="soft">Study flashcards</Button>
+                <Button onClick={openWeekly} variant="secondary">Take weekly 60-question exam</Button>
+                <Button onClick={openFull} variant="success" disabled={!dueExamDay}>Take full 180-question exam</Button>
               </div>
-            )}
+            </div>
           </Card>
 
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <Button onClick={openDaily}>Generate daily session</Button>
-            <Button onClick={openFlashcards}>Study flashcards</Button>
-            <Button onClick={openWeekly}>Take weekly 60-question exam</Button>
-            <Button onClick={openFull} disabled={!dueExamDay}>Take full 180-question exam</Button>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <Card tone="cyan">
+              <div style={{ fontWeight: 900, marginBottom: 10, fontSize: 18 }}>Why the question engine is stronger now</div>
+              <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7, color: "#164e63" }}>
+                <li>Scenarios come from real project environments instead of abstract topic labels.</li>
+                <li>Industries rotate so the app feels more like real life, not one fake template.</li>
+                <li>Wrong answers are believable PMP traps rather than nonsense distractors.</li>
+                <li>Correct answers still lean PMI: analyze, align, then act.</li>
+              </ul>
+            </Card>
+            <Card tone="pink">
+              <div style={{ fontWeight: 900, marginBottom: 10, fontSize: 18 }}>How the study rhythm works</div>
+              <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7, color: "#9d174d" }}>
+                <li>Daily session = lesson + flashcards + PMP-style questions.</li>
+                <li>Flashcards are definition-heavy and application-heavy, not just one or the other.</li>
+                <li>Weekly exams keep the pressure on between full mock exams.</li>
+                <li>Your readiness score moves as your question volume and performance improve.</li>
+              </ul>
+            </Card>
           </div>
-
-          <Card>
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>Weak topics</div>
-            <div>{profile.weakTopics.length ? profile.weakTopics.join(", ") : "Not enough data yet — answer more questions to identify weak areas."}</div>
-          </Card>
-
-          <Card>
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>Why the questions feel more PMP-like now</div>
-            <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.6 }}>
-              <li>Scenarios are built from realistic industries and delivery settings.</li>
-              <li>Stems use natural project language instead of exam-coaching labels.</li>
-              <li>Wrong answers reflect believable PMP traps, not nonsense distractors.</li>
-              <li>Correct answers favor analysis, sequencing, stakeholder engagement, and the right delivery method.</li>
-            </ul>
-          </Card>
         </div>
       )}
 
       {screen === "session" && session && (
         <div style={{ display: "grid", gap: 16 }}>
-          <Card>
-            <div style={{ fontWeight: 700, fontSize: 18 }}>{session.lesson.title}</div>
-            <p><strong>TL;DR:</strong> {session.lesson.tldr}</p>
-            <ul style={{ lineHeight: 1.6 }}>
-              {session.lesson.keyPoints.map((k, i) => <li key={i}>{k}</li>)}
-            </ul>
+          <Card tone="hero">
+            <SectionHeader eyebrow="Daily lesson" title={session.lesson.title} blurb={session.lesson.tldr} tone="violet" />
+            <div style={{ marginTop: 14 }}>
+              <ul style={{ lineHeight: 1.75, margin: 0, paddingLeft: 18 }}>
+                {session.lesson.keyPoints.map((k, i) => <li key={i}>{k}</li>)}
+              </ul>
+            </div>
           </Card>
 
-          <Card>
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>Today’s flashcards ({session.flashcards.length})</div>
-            <div style={{ color: "#475569" }}>Use the dashboard button to review them one by one with spaced repetition.</div>
+          <Card tone="amber">
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontWeight: 900, marginBottom: 6, fontSize: 18 }}>Today’s flashcards</div>
+                <div style={{ color: "#92400e" }}>{session.flashcards.length} cards are lined up. Review them in the flashcard mode with spaced repetition.</div>
+              </div>
+              <Badge tone="amber">Day cap: 15</Badge>
+            </div>
           </Card>
 
           {session.questions.map((q, i) => (
-            <Card key={q.id}>
-              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>{q.domain} • {q.topic} • {q.difficulty} • {q.environment}</div>
-              <div style={{ fontWeight: 600, marginBottom: 10 }}>{i + 1}. {q.q}</div>
-              <div style={{ display: "grid", gap: 8 }}>
+            <Card key={q.id} tone={i % 3 === 0 ? "cyan" : i % 3 === 1 ? "violet" : "pink"}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                <Badge tone="slate">{q.domain}</Badge>
+                <Badge tone="violet">{q.topic}</Badge>
+                <Badge tone="amber">{q.difficulty}</Badge>
+                <Badge tone="cyan">{q.environment}</Badge>
+              </div>
+              <div style={{ fontWeight: 800, marginBottom: 12, fontSize: 18, lineHeight: 1.55 }}>{i + 1}. {q.q}</div>
+              <div style={{ display: "grid", gap: 10 }}>
                 {q.choices.map((choice) => {
                   const letter = choice.split(".")[0];
+                  const active = answers[q.id] === letter;
                   return (
-                    <label key={choice} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                    <label
+                      key={choice}
+                      style={{
+                        display: "flex",
+                        gap: 10,
+                        alignItems: "flex-start",
+                        padding: 12,
+                        borderRadius: 16,
+                        border: active ? "1px solid rgba(139,92,246,0.35)" : "1px solid rgba(148,163,184,0.18)",
+                        background: active ? "rgba(255,255,255,0.88)" : "rgba(255,255,255,0.54)",
+                        boxShadow: active ? "0 10px 24px rgba(139,92,246,0.12)" : "none"
+                      }}
+                    >
                       <input
                         type="radio"
                         name={q.id}
-                        checked={answers[q.id] === letter}
+                        checked={active}
                         onChange={() => setAnswers((prev) => ({ ...prev, [q.id]: letter }))}
                       />
                       <span>{choice}</span>
@@ -1159,29 +1419,51 @@ export default function App() {
             </Card>
           ))}
 
-          <Button onClick={submitQuestions}>Submit session</Button>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <Button onClick={submitQuestions}>Submit session</Button>
+          </div>
         </div>
       )}
 
       {screen === "exam" && session && (
         <div style={{ display: "grid", gap: 16 }}>
-          <Card>
-            <div style={{ fontWeight: 700, fontSize: 18 }}>{session.title}</div>
-            <div>{session.questions.length} questions. Answer what you can, then submit for review.</div>
+          <Card tone="dark">
+            <SectionHeader
+              eyebrow={session.kind === "full" ? "Full exam sim" : "Weekly exam"}
+              title={session.title}
+              blurb={`${session.questions.length} questions. Answer what you can, then review the rationale for every item.`}
+              tone="pink"
+            />
           </Card>
           {session.questions.map((q, i) => (
-            <Card key={q.id}>
-              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>{q.domain} • {q.topic} • {q.difficulty} • {q.industry}</div>
-              <div style={{ fontWeight: 600, marginBottom: 10 }}>{i + 1}. {q.q}</div>
-              <div style={{ display: "grid", gap: 8 }}>
+            <Card key={q.id} tone="default">
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                <Badge tone="slate">{q.domain}</Badge>
+                <Badge tone="cyan">{q.topic}</Badge>
+                <Badge tone="amber">{q.difficulty}</Badge>
+                <Badge tone="rose">{q.industry}</Badge>
+              </div>
+              <div style={{ fontWeight: 800, marginBottom: 12, lineHeight: 1.55 }}>{i + 1}. {q.q}</div>
+              <div style={{ display: "grid", gap: 10 }}>
                 {q.choices.map((choice) => {
                   const letter = choice.split(".")[0];
+                  const active = answers[q.id] === letter;
                   return (
-                    <label key={choice} style={{ display: "flex", gap: 8 }}>
+                    <label
+                      key={choice}
+                      style={{
+                        display: "flex",
+                        gap: 10,
+                        padding: 12,
+                        borderRadius: 16,
+                        border: active ? "1px solid rgba(6,182,212,0.35)" : "1px solid rgba(148,163,184,0.18)",
+                        background: active ? "rgba(236,254,255,0.9)" : "rgba(255,255,255,0.7)",
+                      }}
+                    >
                       <input
                         type="radio"
                         name={q.id}
-                        checked={answers[q.id] === letter}
+                        checked={active}
                         onChange={() => setAnswers((prev) => ({ ...prev, [q.id]: letter }))}
                       />
                       <span>{choice}</span>
@@ -1191,21 +1473,34 @@ export default function App() {
               </div>
             </Card>
           ))}
-          <Button onClick={submitQuestions}>Submit exam</Button>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <Button onClick={submitQuestions} variant="secondary">Submit exam</Button>
+          </div>
         </div>
       )}
 
       {screen === "review" && session?.results && (
         <div style={{ display: "grid", gap: 16 }}>
-          <Card>
-            <div style={{ fontWeight: 700, fontSize: 22 }}>Score: {session.percent}%</div>
-            <div style={{ color: "#475569" }}>Review every question. Missed questions automatically create flashcards.</div>
+          <Card tone="hero">
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 26 }}>Score: {session.percent}%</div>
+                <div style={{ color: "#475569", marginTop: 6 }}>Review every question. Missed questions automatically create fresh flashcards.</div>
+              </div>
+              <Badge tone={session.percent >= 80 ? "emerald" : session.percent >= 65 ? "amber" : "rose"}>
+                {session.percent >= 80 ? "Strong session" : session.percent >= 65 ? "Needs tightening" : "Heavy review needed"}
+              </Badge>
+            </div>
           </Card>
           {session.results.map((q, i) => (
-            <Card key={q.id}>
-              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>{q.domain} • {q.topic} • {q.trap}</div>
-              <div style={{ fontWeight: 600 }}>{i + 1}. {q.q}</div>
-              <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+            <Card key={q.id} tone={q.correctFlag ? "emerald" : "pink"}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                <Badge tone="slate">{q.domain}</Badge>
+                <Badge tone="violet">{q.topic}</Badge>
+                <Badge tone="rose">{q.trap}</Badge>
+              </div>
+              <div style={{ fontWeight: 800, lineHeight: 1.55 }}>{i + 1}. {q.q}</div>
+              <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
                 {q.choices.map((choice) => {
                   const letter = choice.split(".")[0];
                   const isCorrect = letter === q.correct;
@@ -1214,10 +1509,10 @@ export default function App() {
                     <div
                       key={choice}
                       style={{
-                        padding: 10,
-                        borderRadius: 10,
-                        background: isCorrect ? "#dcfce7" : isSelected ? "#fee2e2" : "#f8fafc",
-                        border: "1px solid #e5e7eb"
+                        padding: 12,
+                        borderRadius: 16,
+                        background: isCorrect ? "rgba(220,252,231,0.92)" : isSelected ? "rgba(254,226,226,0.92)" : "rgba(255,255,255,0.72)",
+                        border: isCorrect ? "1px solid rgba(34,197,94,0.28)" : isSelected ? "1px solid rgba(248,113,113,0.28)" : "1px solid rgba(148,163,184,0.18)"
                       }}
                     >
                       {choice}
@@ -1225,10 +1520,10 @@ export default function App() {
                   );
                 })}
               </div>
-              <div style={{ marginTop: 12 }}><strong>Correct answer:</strong> {q.correct}</div>
-              <div style={{ marginTop: 8 }}><strong>Why the correct answer is correct:</strong> {q.explanation.correct}</div>
+              <div style={{ marginTop: 14 }}><strong>Correct answer:</strong> {q.correct}</div>
+              <div style={{ marginTop: 8, lineHeight: 1.6 }}><strong>Why the correct answer is correct:</strong> {q.explanation.correct}</div>
               {["A", "B", "C", "D"].map((letter) => (
-                <div key={letter} style={{ marginTop: 6 }}>
+                <div key={letter} style={{ marginTop: 6, lineHeight: 1.6 }}>
                   <strong>{letter}:</strong> {q.explanation[letter]}
                 </div>
               ))}
@@ -1238,23 +1533,42 @@ export default function App() {
       )}
 
       {screen === "flashcards" && session?.flashcards?.length > 0 && (
-        <div style={{ display: "grid", gap: 16 }}>
-          <Card>
-            <div style={{ fontWeight: 700 }}>Flashcard {flashIndex + 1} of {session.flashcards.length}</div>
+        <div style={{ display: "grid", gap: 16, maxWidth: 820, margin: "0 auto" }}>
+          <Card tone="hero">
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ fontWeight: 900, fontSize: 18 }}>Flashcard {flashIndex + 1} of {session.flashcards.length}</div>
+              <Badge tone="amber">Spaced repetition mode</Badge>
+            </div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 14 }}>{session.flashcards[flashIndex].front}</div>
-            {showBack && (
-              <div style={{ fontSize: 17, color: "#334155" }}>{session.flashcards[flashIndex].back}</div>
+          <Card tone="dark" padding={28}>
+            <div style={{ fontSize: 26, fontWeight: 900, marginBottom: 16, lineHeight: 1.35, color: "#f8fafc" }}>
+              {session.flashcards[flashIndex].front}
+            </div>
+            {showBack ? (
+              <div
+                style={{
+                  fontSize: 18,
+                  color: "#e2e8f0",
+                  lineHeight: 1.7,
+                  padding: 18,
+                  borderRadius: 20,
+                  background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.12)"
+                }}
+              >
+                {session.flashcards[flashIndex].back}
+              </div>
+            ) : (
+              <div style={{ color: "#cbd5e1" }}>Tap “Show answer” when you’re ready to flip this card.</div>
             )}
           </Card>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
             {!showBack && <Button onClick={() => setShowBack(true)}>Show answer</Button>}
             {showBack && (
               <>
-                <Button onClick={() => rateFlashcard("hard")}>Again soon</Button>
-                <Button onClick={() => rateFlashcard("medium")}>Good</Button>
-                <Button onClick={() => rateFlashcard("easy")}>Easy</Button>
+                <Button onClick={() => rateFlashcard("hard")} variant="soft">Again soon</Button>
+                <Button onClick={() => rateFlashcard("medium")} variant="primary">Good</Button>
+                <Button onClick={() => rateFlashcard("easy")} variant="success">Easy</Button>
               </>
             )}
           </div>
