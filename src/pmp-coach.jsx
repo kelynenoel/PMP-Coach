@@ -1,7 +1,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 
-const STORAGE_KEY = "pmpCoachFullV1";
+const STORAGE_KEY = "pmpCoachFullV2";
 
 const COLORS = {
   bg: "#0b1020",
@@ -584,23 +584,57 @@ const TOPICS = [
   },
 ];
 
+function starterCard(topic, idx, front, back, cardType = "definition") {
+  return {
+    id: `starter-${topic.key}-${cardType}-${idx}`,
+    topicKey: topic.key,
+    source: "starter",
+    cardType,
+    front,
+    back,
+    ease: 2.5,
+    interval: 0,
+    reps: 0,
+    due: 1,
+    createdDay: 1,
+    lastReviewedDay: null,
+  };
+}
+
+function appliedFlashcardsForTopic(topic) {
+  const actions = {
+    agile: "Coach the team, protect self-management, and use transparency plus feedback loops.",
+    predictive: "Analyze impact, follow documented process, and use formal approvals when baselines change.",
+    hybrid: "Tailor deliberately, preserve governance where needed, and adapt delivery where learning is valuable.",
+  };
+  const modeAction = actions[topic.mode] || actions.hybrid;
+  const point = topic.points?.[0] || topic.summary;
+  const point2 = topic.points?.[1] || topic.summary;
+  const distractor = topic.distractors?.[0] || "act without analysis";
+  return [
+    [
+      `PMI application: What is usually the BEST next step when a ${topic.name.toLowerCase()} scenario becomes unclear?`,
+      `${modeAction} Start by understanding the issue and its impact before choosing a response.`,
+    ],
+    [
+      `Trap to avoid in ${topic.name.toLowerCase()}`,
+      `Avoid choices that ${distractor}. PMI usually prefers analysis, stakeholder engagement, and a process-aligned response.`,
+    ],
+    [
+      `${topic.name}: exam clue`,
+      `${point} ${point2} On the exam, look for the answer that protects value and alignment rather than the fastest reaction.`,
+    ],
+  ];
+}
+
 function starterFlashcardsFromTopics() {
   const cards = [];
   TOPICS.forEach((topic) => {
     topic.flashcards.forEach(([front, back], idx) => {
-      cards.push({
-        id: `starter-${topic.key}-${idx}`,
-        topicKey: topic.key,
-        source: "starter",
-        front,
-        back,
-        ease: 2.5,
-        interval: 0,
-        reps: 0,
-        due: 1,
-        createdDay: 1,
-        lastReviewedDay: null,
-      });
+      cards.push(starterCard(topic, idx, front, back, "definition"));
+    });
+    appliedFlashcardsForTopic(topic).forEach(([front, back], idx) => {
+      cards.push(starterCard(topic, idx, front, back, "application"));
     });
   });
   return cards;
@@ -641,7 +675,12 @@ function loadProfile() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return buildInitialProfile();
     const parsed = JSON.parse(raw);
-    return { ...buildInitialProfile(), ...parsed };
+    const merged = { ...buildInitialProfile(), ...parsed };
+    merged.flashcards = (merged.flashcards || []).map((card) => ({
+      cardType: card.source === "mistake" ? "application" : "definition",
+      ...card,
+    }));
+    return merged;
   } catch {
     return buildInitialProfile();
   }
@@ -719,219 +758,291 @@ function weightedReadiness(profile) {
   return clamp(Math.round(weighted + volumeBoost), 0, 100);
 }
 
-const QUESTION_TEMPLATES = [
+
+const INDUSTRIES = [
+  "public health data modernization",
+  "hospital expansion",
+  "state benefits platform rollout",
+  "financial services compliance program",
+  "construction modernization initiative",
+  "higher education technology upgrade",
+  "global NGO service delivery program",
+  "pharmaceutical product launch",
+  "manufacturing automation effort",
+  "municipal infrastructure project",
+  "cybersecurity improvement program",
+  "telehealth platform implementation",
+];
+
+const ENV_LABEL = {
+  predictive: "predictive",
+  agile: "agile",
+  hybrid: "hybrid",
+};
+
+const SCENARIO_BLUEPRINTS = [
   {
-    key: "next-step",
-    stem: (topic) => `You are managing a ${topic.mode} project. A situation related to ${topic.name.toLowerCase()} has created uncertainty. What should the project manager do NEXT?`,
-    correctLabel: "Take the proactive step that applies process and stakeholder awareness.",
-    wrongLabels: [
-      "Wait for more problems before acting.",
-      "Bypass stakeholders or governance to save time.",
-      "Take a reactive action that treats symptoms instead of the cause.",
+    key: "analyze-next",
+    difficulty: ["Medium", "Hard", "Exam-level", "Hard"],
+    stem: (topic, ctx) => `On a ${ctx.industry} ${ctx.env} project, a key deliverable tied to ${topic.name.toLowerCase()} is slipping. The sponsor wants an immediate answer, but the team has conflicting explanations and stakeholder expectations are unclear. What should the project manager do NEXT?`,
+    optionTypes: (topic) => [
+      "analyze_then_act",
+      "escalate_too_early",
+      "implement_without_analysis",
+      "wait_and_see",
     ],
-    build(topic) {
-      return {
-        q: this.stem(topic),
-        correctText: bestActionForTopic(topic),
-        wrongTexts: wrongActionsForTopic(topic),
-        trap: trapForTopic(topic),
-      };
-    },
+    trap: "premature escalation",
   },
   {
-    key: "scenario",
-    stem: (topic) => `A team working on ${topic.name.toLowerCase()} is struggling because assumptions are not aligned. Which action best reflects PMI thinking?`,
-    build(topic) {
-      return {
-        q: this.stem(topic),
-        correctText: bestActionForTopic(topic),
-        wrongTexts: wrongActionsForTopic(topic),
-        trap: "Picking a fast but shallow response instead of clarifying, collaborating, and applying the right method.",
-      };
-    },
+    key: "stakeholder-alignment",
+    difficulty: ["Hard", "Exam-level", "Hard", "Medium"],
+    stem: (topic, ctx) => `During a ${ctx.industry} ${ctx.env} project, two influential stakeholders disagree on priorities related to ${topic.name.toLowerCase()}. One wants speed and the other wants more review. The disagreement is beginning to affect the team. What should the project manager do FIRST?`,
+    optionTypes: (topic) => [
+      "engage_stakeholders_first",
+      "choose_powerful_stakeholder",
+      "generic_update_only",
+      "escalate_too_early",
+    ],
+    trap: "ignoring stakeholder input",
   },
   {
-    key: "agile-hybrid",
-    stem: (topic) => `A project contains both stable regulatory work and emerging customer needs. The issue involves ${topic.name.toLowerCase()}. What is the BEST action?`,
-    build(topic) {
-      return {
-        q: this.stem(topic),
-        correctText: hybridAwareActionForTopic(topic),
-        wrongTexts: wrongActionsForTopic(topic),
-        trap: "Forgetting that hybrid projects still need both governance and adaptation.",
-      };
-    },
+    key: "change-pressure",
+    difficulty: ["Hard", "Exam-level", "Hard", "Exam-level"],
+    stem: (topic, ctx) => `Late in a ${ctx.industry} ${ctx.env} project, a stakeholder requests a change related to ${topic.name.toLowerCase()} after seeing early results. The team says it can probably be done quickly, but schedule and downstream impacts are unknown. What is the BEST action?`,
+    optionTypes: (topic) => topic.mode === "agile"
+      ? ["backlog_reprioritize", "implement_without_analysis", "reject_without_review", "escalate_too_early"]
+      : ["formal_change_control", "implement_without_analysis", "reject_without_review", "escalate_too_early"],
+    trap: "skipping change control",
   },
   {
-    key: "principle",
-    stem: (topic) => `Which option best aligns with the principle behind ${topic.name.toLowerCase()}?`,
-    build(topic) {
-      return {
-        q: this.stem(topic),
-        correctText: bestActionForTopic(topic),
-        wrongTexts: wrongActionsForTopic(topic),
-        trap: "Choosing a technically possible action that conflicts with value, ethics, or stakeholder engagement.",
-      };
-    },
+    key: "risk-or-issue",
+    difficulty: ["Medium", "Hard", "Hard", "Exam-level"],
+    stem: (topic, ctx) => ctx.variant % 2 === 0
+      ? `On a ${ctx.industry} ${ctx.env} project, new information shows that a dependency related to ${topic.name.toLowerCase()} may fail next month and could affect a major milestone. What should the project manager do NEXT?`
+      : `On a ${ctx.industry} ${ctx.env} project, a dependency related to ${topic.name.toLowerCase()} has already failed and is now affecting committed work. What should the project manager do NEXT?`,
+    optionTypes: (topic, ctx) => ctx.variant % 2 === 0
+      ? ["manage_as_risk", "treat_risk_as_issue", "ignore_until_happens", "escalate_too_early"]
+      : ["manage_as_issue", "treat_issue_as_risk", "wait_and_see", "escalate_too_early"],
+    trap: "risk vs issue",
   },
   {
-    key: "exam-style",
-    stem: (topic) => `During a high-pressure situation involving ${topic.name.toLowerCase()}, four actions are proposed. Which one should the PM choose first?`,
-    build(topic) {
-      return {
-        q: this.stem(topic),
-        correctText: bestActionForTopic(topic),
-        wrongTexts: wrongActionsForTopic(topic),
-        trap: "Escalating or changing course before understanding the issue and using the correct process.",
-      };
-    },
+    key: "team-leadership",
+    difficulty: ["Hard", "Exam-level", "Medium", "Hard"],
+    stem: (topic, ctx) => topic.mode === "agile"
+      ? `During a ${ctx.industry} agile project, the team is struggling with ${topic.name.toLowerCase()}. Daily collaboration has turned into status reporting, team members are waiting for instructions, and progress is slowing. What should the project manager or Scrum Master do FIRST?`
+      : `During a ${ctx.industry} ${ctx.env} project, team tension related to ${topic.name.toLowerCase()} is lowering trust and slowing execution. What should the project manager do FIRST?`,
+    optionTypes: (topic) => topic.mode === "agile"
+      ? ["servant_leadership", "command_and_control", "replace_team_member", "escalate_too_early"]
+      : ["collaborative_resolution", "command_and_control", "replace_team_member", "escalate_too_early"],
+    trap: topic.mode === "agile" ? "command-and-control leadership in Agile" : "reactive people management",
+  },
+  {
+    key: "value-governance",
+    difficulty: ["Hard", "Exam-level", "Hard", "Exam-level"],
+    stem: (topic, ctx) => `In a ${ctx.industry} ${ctx.env} project, leadership is pleased that schedule is on track, but there are growing concerns that work related to ${topic.name.toLowerCase()} may not deliver the intended business value or satisfy compliance expectations. What is the BEST action?`,
+    optionTypes: (topic) => [
+      "protect_value_and_compliance",
+      "focus_on_schedule_only",
+      "hide_or_delay_bad_news",
+      "implement_without_analysis",
+    ],
+    trap: "focusing on execution metrics instead of value",
   },
 ];
 
-function bestActionForTopic(topic) {
+function stableIndex(seed, mod) {
+  let hash = 0;
+  const str = String(seed);
+  for (let i = 0; i < str.length; i += 1) {
+    hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+  }
+  return mod === 0 ? 0 : hash % mod;
+}
+
+function rotate(arr, amount) {
+  const n = arr.length;
+  if (!n) return arr;
+  const shift = ((amount % n) + n) % n;
+  return arr.slice(shift).concat(arr.slice(0, shift));
+}
+
+function topicSpecificAction(topic) {
   const map = {
-    ethics: "Refuse the unethical request, explain the concern, and escalate appropriately while documenting the issue.",
-    foundations: "Clarify whether the work is a project, program, portfolio component, or operations activity before planning further.",
-    org: "Clarify the organizational structure and engage the right authority for decisions about resources and escalation.",
-    value: "Reconnect the decision to intended outcomes, benefits, and stakeholder value before proceeding.",
-    "eefs-opas": "Identify whether the factor is an EEF or OPA, then update or respond accordingly.",
-    "functions-roles": "Engage the correct role for the decision and clarify responsibilities before taking action.",
-    principles: "Apply the principle-based, tailored response rather than forcing a one-size-fits-all method.",
-    "life-cycles": "Choose or adjust the delivery approach based on uncertainty, feedback needs, and governance requirements.",
-    governance: "Follow governance by documenting the issue, using the correct authority, and updating plans or baselines as needed.",
-    scope: "Clarify scope, review the baseline or backlog, and use the proper acceptance or change mechanism.",
-    schedule: "Analyze dependencies and critical path before compressing or re-sequencing work.",
-    estimating: "Use the appropriate estimation technique and acknowledge uncertainty rather than pretending to have precision.",
-    evm: "Analyze the current metrics first, then forecast and recommend the appropriate corrective action.",
-    quality: "Identify the root cause and improve the process, while also verifying deliverables meet requirements.",
-    "resources-conflict": "Facilitate a collaborative discussion, remove impediments, and support the team toward resolution.",
-    "stakeholders-comms": "Understand stakeholder needs, tailor communication, and engage the right people directly.",
-    risk: "Document the risk or issue correctly, analyze impact, and choose the response that matches the situation.",
-    procurement: "Review contract terms and allocate risk appropriately before making commitments.",
-    business: "Assess strategic, compliance, and benefits implications before deciding.",
-    "agile-mindset": "Increase collaboration and feedback while keeping the team focused on early value delivery.",
-    backlog: "Work with the Product Owner to refine and reprioritize the backlog based on value and readiness.",
-    scrum: "Use the appropriate Scrum role or event to inspect, adapt, and remove impediments.",
-    kanban: "Visualize the bottleneck, limit WIP, and improve flow before starting more work.",
-    "agile-quality": "Increase transparency, inspect the increment, and use retrospectives to improve the process.",
-    hybrid: "Apply governance where needed while using adaptive techniques for uncertain or emerging work.",
+    ethics: "address the ethical concern transparently, document it, and involve the appropriate authority only after clarifying the facts",
+    foundations: "clarify the type of work and governance path before selecting the next planning action",
+    org: "confirm who has authority for resources and decisions in the current structure before acting",
+    value: "reconnect the decision to outcomes, benefits, and stakeholder value before moving forward",
+    "eefs-opas": "distinguish whether the factor is an EEF or OPA and respond appropriately",
+    "functions-roles": "engage the correct role and clarify ownership before moving work forward",
+    principles: "tailor the response rather than forcing a one-size-fits-all approach",
+    "life-cycles": "adjust the delivery approach to fit uncertainty, feedback needs, and governance requirements",
+    governance: "follow documented governance, authority, and baseline-management rules",
+    scope: "clarify the scope baseline or backlog item and use the correct acceptance or change path",
+    schedule: "analyze dependencies and critical path impact before compressing or resequencing work",
+    estimating: "use the right estimating technique and acknowledge uncertainty instead of pretending to know more than you do",
+    evm: "interpret the performance data, forecast realistically, and then recommend corrective action",
+    quality: "find the root cause and improve the process while confirming requirements are met",
+    "resources-conflict": "facilitate collaboration and resolve tension before it damages delivery",
+    "stakeholders-comms": "understand stakeholder needs and tailor engagement instead of sending generic updates",
+    risk: "separate future uncertainty from current issues and choose the response that fits",
+    procurement: "review contract terms and risk allocation before committing to a response",
+    business: "assess strategic alignment, benefits, and compliance before deciding",
+    "agile-mindset": "increase collaboration, transparency, and feedback while protecting team ownership",
+    backlog: "refine and reprioritize the backlog with the Product Owner based on value and readiness",
+    scrum: "use the correct Scrum role or event to inspect, adapt, and remove impediments",
+    kanban: "visualize the bottleneck, limit WIP, and improve flow before starting more work",
+    "agile-quality": "inspect the increment, raise transparency, and improve the process through retrospectives",
+    hybrid: "balance formal governance with adaptive delivery instead of treating the project as purely one mode",
   };
-  return map[topic.key] || "Clarify the issue, engage stakeholders, and choose the proactive, value-focused action.";
+  return map[topic.key] || "analyze the situation, engage the right people, and choose the most proactive path";
 }
 
-function hybridAwareActionForTopic(topic) {
-  if (topic.mode === "predictive") return bestActionForTopic(topic);
-  if (topic.mode === "agile") return `${bestActionForTopic(topic)} Use agile ceremonies, transparency, and short feedback loops.`;
-  return `${bestActionForTopic(topic)} Balance formal governance with flexible delivery where appropriate.`;
+function textForOptionType(type, topic, ctx) {
+  const action = topicSpecificAction(topic);
+  switch (type) {
+    case "analyze_then_act":
+      return `Review the available data with the team and relevant stakeholders, clarify root cause and impact, and then ${action}.`;
+    case "engage_stakeholders_first":
+      return `Meet with the affected stakeholders to understand their underlying interests, align on success criteria, and then ${action}.`;
+    case "formal_change_control":
+      return `Assess the change impact, submit a formal change request, and use integrated change control before implementation.`;
+    case "backlog_reprioritize":
+      return `Work with the Product Owner to assess value and impacts, reprioritize the backlog if appropriate, and communicate the decision transparently.`;
+    case "manage_as_risk":
+      return `Document the item in the risk register, assess probability and impact, plan a response, and engage the risk owner before the threat materializes.`;
+    case "manage_as_issue":
+      return `Treat the problem as an issue, assess its impact, execute the appropriate response plan or workaround, and update logs, owners, and stakeholders.`;
+    case "servant_leadership":
+      return `Coach the team using servant leadership, remove impediments, and facilitate direct collaboration instead of directing the work.`;
+    case "collaborative_resolution":
+      return `Bring the team members together, understand the source of the tension, and facilitate a collaborative resolution before considering escalation.`;
+    case "protect_value_and_compliance":
+      return `Reassess benefits, compliance, and stakeholder impact with the appropriate governance partners, then adjust plans, priorities, or reporting to protect value.`;
+    case "escalate_too_early":
+      return `Escalate the situation to the sponsor immediately and ask for a decision before doing any additional analysis.`;
+    case "implement_without_analysis":
+      return `Approve the fastest solution the team proposes now so work can continue, and analyze the impacts later if needed.`;
+    case "wait_and_see":
+      return `Wait until the next status meeting to see whether the problem becomes clearer before taking any action.`;
+    case "choose_powerful_stakeholder":
+      return `Follow the request of the most senior stakeholder first and inform the others after the decision has been made.`;
+    case "generic_update_only":
+      return `Send all stakeholders the same generic status update and avoid individual conversations until emotions cool down.`;
+    case "reject_without_review":
+      return `Reject the request immediately to protect the baseline and avoid opening the door to more changes.`;
+    case "treat_risk_as_issue":
+      return `Start executing a corrective action plan immediately, because any potential threat should be managed like an active issue.`;
+    case "ignore_until_happens":
+      return `Do nothing yet, because the event has not happened and documenting it would create unnecessary concern.`;
+    case "treat_issue_as_risk":
+      return `Record the current problem in the risk register and review it at the next risk meeting before taking action.`;
+    case "command_and_control":
+      return `Assign the next tasks yourself, require detailed daily status updates, and tighten control until the team improves.`;
+    case "replace_team_member":
+      return `Remove the team member creating the most friction and replace them before exploring other options.`;
+    case "focus_on_schedule_only":
+      return `Keep execution focused on the current schedule baseline and postpone any discussion of value or compliance until closeout.`;
+    case "hide_or_delay_bad_news":
+      return `Delay sharing the concern with stakeholders until you can present a complete solution, so leadership confidence is not affected.`;
+    default:
+      return `Clarify the situation and ${action}.`;
+  }
 }
 
-function wrongActionsForTopic(topic) {
-  return [
-    topic.distractors?.[0] ? `Ignore the context and ${topic.distractors[0]}.` : "Wait and hope the issue resolves itself.",
-    topic.distractors?.[1] ? `Act quickly but ${topic.distractors[1]}.` : "Skip analysis and make a unilateral decision.",
-    topic.distractors?.[2] ? `Escalate immediately and ${topic.distractors[2]}.` : "Blame the team and avoid the process.",
-  ];
+function explanationForOptionType(type, topic) {
+  switch (type) {
+    case "analyze_then_act":
+      return `This is the best answer because PMI expects the project manager to analyze before acting. The PM should clarify root cause, impact, and the right path before making a decision, especially for ${topic.name.toLowerCase()}.`;
+    case "engage_stakeholders_first":
+      return `This is best because PMI favors direct stakeholder engagement before escalation. Understanding underlying interests leads to a better decision and protects team alignment.`;
+    case "formal_change_control":
+      return `This is correct because in predictive or governance-heavy work, requested changes should go through impact analysis and formal change control before implementation.`;
+    case "backlog_reprioritize":
+      return `This is correct because agile teams absorb change by reassessing value and reprioritizing the backlog transparently rather than using command-and-control tactics.`;
+    case "manage_as_risk":
+      return `This is correct because the event has not happened yet. PMI expects future uncertainty to be managed as a risk, with analysis, ownership, and response planning.`;
+    case "manage_as_issue":
+      return `This is correct because the event is already happening. PMI expects current problems to be treated as issues that require active management now.`;
+    case "servant_leadership":
+      return `This is correct because agile leadership is servant leadership. The leader coaches, facilitates, and removes impediments instead of directing the team's every move.`;
+    case "collaborative_resolution":
+      return `This is correct because PMI expects the PM to address conflict early, understand causes, and facilitate resolution before escalating.`;
+    case "protect_value_and_compliance":
+      return `This is best because PMI evaluates success using value, benefits, and compliance, not just schedule or cost. The PM should address those concerns proactively.`;
+    case "escalate_too_early":
+      return `This is not best because it escalates before analysis and direct engagement. PMI usually expects the PM to understand the situation first and only escalate when appropriate.`;
+    case "implement_without_analysis":
+      return `This is wrong because it moves to execution before understanding impact, tradeoffs, or the correct process. PMI favors analysis before action.`;
+    case "wait_and_see":
+      return `This is wrong because it is reactive. PMI favors proactive action once a meaningful signal is available.`;
+    case "choose_powerful_stakeholder":
+      return `This is wrong because choosing the most powerful voice without alignment ignores stakeholder engagement and often harms long-term outcomes.`;
+    case "generic_update_only":
+      return `This is weaker because generic communication does not resolve conflict or uncover stakeholder interests. PMI expects tailored engagement.`;
+    case "reject_without_review":
+      return `This is wrong because the PM should not accept or reject a change blindly. Impact should be understood before a decision is made.`;
+    case "treat_risk_as_issue":
+      return `This is wrong because a possible future event is a risk, not an active issue. The PM should assess and plan, not jump straight into corrective action.`;
+    case "ignore_until_happens":
+      return `This is wrong because known uncertainty should be documented and analyzed early. Waiting removes the chance to reduce impact.`;
+    case "treat_issue_as_risk":
+      return `This is wrong because the problem is already happening. PMI expects the PM to manage an issue immediately rather than defer it through the risk process.`;
+    case "command_and_control":
+      return `This is not best because it reduces ownership and collaboration. It is especially poor in agile settings, where servant leadership is expected.`;
+    case "replace_team_member":
+      return `This is premature because PMI expects the PM to understand the source of the conflict or performance problem before taking drastic action.`;
+    case "focus_on_schedule_only":
+      return `This is wrong because it treats schedule as the only success measure and ignores value, benefits, and compliance.`;
+    case "hide_or_delay_bad_news":
+      return `This is wrong because PMI expects transparency. Bad news should be communicated appropriately, not hidden until it becomes worse.`;
+    default:
+      return `This option is weaker because it does not reflect the best PMI next action for ${topic.name.toLowerCase()}.`;
+  }
 }
 
-function trapForTopic(topic) {
-  const map = {
-    ethics: "Thinking sponsor pressure overrides ethics.",
-    foundations: "Confusing temporary project work with ongoing operations.",
-    org: "Ignoring who actually controls resources.",
-    value: "Treating schedule and budget as the only success measures.",
-    "eefs-opas": "Mixing up what the team can update versus what it must respond to.",
-    "life-cycles": "Assuming agile is always best.",
-    governance: "Making baseline changes informally.",
-    scope: "Confusing deliverable acceptance with change control.",
-    schedule: "Compressing work without considering risk or critical path.",
-    evm: "Memorizing formulas without interpreting them.",
-    quality: "Inspecting defects without improving the process.",
-    risk: "Treating an issue like a future risk or vice versa.",
-    "agile-mindset": "Equating agile with no planning or no governance.",
-    scrum: "Using Scrum roles like traditional command-and-control positions.",
-    kanban: "Starting too much work instead of improving flow.",
-    hybrid: "Combining methods randomly instead of intentionally tailoring.",
+function buildContext(topic, blueprint, variant) {
+  return {
+    industry: INDUSTRIES[stableIndex(`${topic.key}-${blueprint.key}-${variant}`, INDUSTRIES.length)],
+    env: ENV_LABEL[topic.mode] || "hybrid",
+    variant,
   };
-  return map[topic.key] || "Choosing a reactive answer instead of a proactive, structured one.";
-}
-
-function difficultyForDay(day) {
-  if (day <= 10) return "Easy";
-  if (day <= 24) return "Medium";
-  if (day <= 40) return "Hard";
-  return "Exam-level";
 }
 
 function buildQuestionBank() {
   const bank = [];
-  TOPICS.forEach((topic, topicIndex) => {
-    QUESTION_TEMPLATES.forEach((tpl, tplIndex) => {
-      for (let i = 0; i < 8; i += 1) {
-        const built = tpl.build(topic);
-        const correct = built.correctText;
-        const wrongs = built.wrongTexts.map((w, idx) => `${w} (${variantTag(i, idx)})`);
-        const correctLetterIndex = (topicIndex + tplIndex + i) % 4;
-        const choicesRaw = [];
-        let wrongCursor = 0;
-        for (let c = 0; c < 4; c += 1) {
-          if (c === correctLetterIndex) {
-            choicesRaw.push(correct);
-          } else {
-            choicesRaw.push(wrongs[wrongCursor]);
-            wrongCursor += 1;
-          }
-        }
-        const letters = ["A", "B", "C", "D"];
+  const letters = ["A", "B", "C", "D"];
+  TOPICS.forEach((topic) => {
+    SCENARIO_BLUEPRINTS.forEach((blueprint) => {
+      for (let variant = 0; variant < 4; variant += 1) {
+        const ctx = buildContext(topic, blueprint, variant);
+        const optionTypes = blueprint.optionTypes(topic, ctx);
+        const rotatedTypes = rotate(optionTypes, stableIndex(`${topic.key}-${blueprint.key}-${variant}-order`, optionTypes.length));
+        const correctType = optionTypes[0];
+        const correctLetter = letters[rotatedTypes.indexOf(correctType)];
+        const choices = rotatedTypes.map((type, idx) => `${letters[idx]}. ${textForOptionType(type, topic, ctx)}`);
+        const wrongAnswers = {};
+        rotatedTypes.forEach((type, idx) => {
+          const letter = letters[idx];
+          if (type !== correctType) wrongAnswers[letter] = explanationForOptionType(type, topic);
+        });
         bank.push({
-          id: `q-${topic.key}-${tpl.key}-${i}`,
+          id: `q-${topic.key}-${blueprint.key}-${variant}`,
           topicKey: topic.key,
           topicName: topic.name,
           domain: topic.domain,
           mode: topic.mode,
-          difficulty: difficultyForDay(1 + ((topicIndex + i) % 60)),
-          q: `${built.q} (${scenarioFlavor(topic, i)})`,
-          choices: choicesRaw.map((txt, idx) => `${letters[idx]}. ${txt}`),
-          correct: letters[correctLetterIndex],
-          whyCorrect: explanationForTopic(topic),
-          trap: built.trap,
-          wrongAnswers: buildWrongExplanations(topic),
+          difficulty: blueprint.difficulty[variant],
+          q: blueprint.stem(topic, ctx),
+          choices,
+          correct: correctLetter,
+          whyCorrect: explanationForOptionType(correctType, topic),
+          trap: blueprint.trap,
+          wrongAnswers,
         });
       }
     });
   });
   return bank;
-}
-
-function scenarioFlavor(topic, i) {
-  const variants = [
-    "A senior stakeholder is frustrated by recent delays.",
-    "The team is distributed and information is incomplete.",
-    "A vendor dependency is affecting confidence.",
-    "Customer feedback has changed what matters most.",
-    "The project is under schedule pressure.",
-    "The work involves compliance requirements.",
-    "A recent review surfaced rework and confusion.",
-    "Multiple teams need coordination before moving forward.",
-  ];
-  return variants[(topic.key.length + i) % variants.length];
-}
-
-function variantTag(i, idx) {
-  const tags = ["without stakeholder input", "without data", "without following process", "without solving the root cause", "without transparency"];
-  return tags[(i + idx) % tags.length];
-}
-
-function explanationForTopic(topic) {
-  return `${topic.summary} The best PMP answer is the one that is proactive, ethical, stakeholder-aware, and properly tailored to the context.`;
-}
-
-function buildWrongExplanations(topic) {
-  return {
-    A: "Only correct if A is not the correct answer for this item.",
-    B: `This option is weaker because it tends to ignore the core lesson from ${topic.name.toLowerCase()}.`,
-    C: "This option is reactive, bypasses the right process, or fails to engage the right people.",
-    D: "This option focuses on speed or authority rather than value, collaboration, and fit.",
-  };
 }
 
 const QUESTION_BANK = buildQuestionBank();
@@ -973,15 +1084,31 @@ function generateDailySession(profile) {
 }
 
 function buildSessionFlashcards(profile, day, topicKey) {
-  const due = dueFlashcards(profile, day)
-    .filter((c) => c.topicKey === topicKey || c.source === "mistake")
-    .slice(0, 8);
-  if (due.length >= 6) return due;
-  const starter = profile.flashcards
-    .filter((c) => c.topicKey === topicKey)
-    .filter((c) => !due.some((d) => d.id === c.id))
-    .slice(0, 8 - due.length);
-  return [...due, ...starter].slice(0, 8);
+  const relevantDue = dueFlashcards(profile, day).filter((c) => c.topicKey === topicKey || c.source === "mistake");
+  const dueMistakes = relevantDue.filter((c) => c.source === "mistake").slice(0, 2);
+  const dueDefinitions = relevantDue.filter((c) => c.cardType === "definition").slice(0, 3);
+  const dueApplications = relevantDue.filter((c) => c.cardType === "application").slice(0, 3);
+
+  const selected = [...dueDefinitions, ...dueApplications, ...dueMistakes];
+  const selectedIds = new Set(selected.map((c) => c.id));
+
+  const starterDefinitions = profile.flashcards
+    .filter((c) => c.topicKey === topicKey && c.cardType === "definition" && !selectedIds.has(c.id))
+    .slice(0, Math.max(0, 4 - dueDefinitions.length));
+
+  starterDefinitions.forEach((c) => selectedIds.add(c.id));
+
+  const starterApplications = profile.flashcards
+    .filter((c) => c.topicKey === topicKey && c.cardType === "application" && !selectedIds.has(c.id))
+    .slice(0, Math.max(0, 3 - dueApplications.length));
+
+  starterApplications.forEach((c) => selectedIds.add(c.id));
+
+  const extraMistakes = profile.flashcards
+    .filter((c) => c.source === "mistake" && !selectedIds.has(c.id))
+    .slice(0, Math.max(0, 8 - selected.length - starterDefinitions.length - starterApplications.length));
+
+  return [...selected, ...starterDefinitions, ...starterApplications, ...extraMistakes].slice(0, 8);
 }
 
 function sessionExample(topic) {
