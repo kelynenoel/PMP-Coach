@@ -1,7 +1,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 
-const STORAGE_KEY = "pmpCoachFullV2";
+const STORAGE_KEY = "pmpCoachFullV4";
 
 const COLORS = {
   bg: "#0b1020",
@@ -670,17 +670,44 @@ function todayString() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function normalizeProfile(parsed) {
+  const base = buildInitialProfile();
+  const merged = { ...base, ...(parsed || {}) };
+  merged.uniqueQuestionIds = Array.isArray(merged.uniqueQuestionIds) ? merged.uniqueQuestionIds : [];
+  merged.flashcards = Array.isArray(merged.flashcards) ? merged.flashcards : base.flashcards;
+  merged.weakTopics = Array.isArray(merged.weakTopics) ? merged.weakTopics : [];
+  merged.strongTopics = Array.isArray(merged.strongTopics) ? merged.strongTopics : [];
+  merged.sessionHistory = Array.isArray(merged.sessionHistory) ? merged.sessionHistory : [];
+  merged.examHistory = Array.isArray(merged.examHistory) ? merged.examHistory : [];
+  merged.summaryHistory = Array.isArray(merged.summaryHistory) ? merged.summaryHistory : [];
+  merged.dayCompletions = Array.isArray(merged.dayCompletions) ? merged.dayCompletions : [];
+  merged.questionMissesByTopic = merged.questionMissesByTopic && typeof merged.questionMissesByTopic === "object" ? merged.questionMissesByTopic : {};
+  merged.domains = merged.domains && typeof merged.domains === "object"
+    ? { people: Number(merged.domains.people) || 0, process: Number(merged.domains.process) || 0, biz: Number(merged.domains.biz) || 0 }
+    : { people: 0, process: 0, biz: 0 };
+  merged.flashcards = merged.flashcards.map((card, idx) => ({
+    id: card?.id || `recovered-card-${idx}`,
+    topicKey: card?.topicKey || "ethics",
+    source: card?.source || "starter",
+    cardType: card?.cardType || (card?.source === "mistake" ? "application" : "definition"),
+    front: card?.front || "Recovered flashcard",
+    back: card?.back || "This card was repaired from saved progress.",
+    ease: Number(card?.ease) || 2.5,
+    interval: Number(card?.interval) || 0,
+    reps: Number(card?.reps) || 0,
+    due: Number(card?.due) || 1,
+    createdDay: Number(card?.createdDay) || 1,
+    lastReviewedDay: card?.lastReviewedDay ?? null,
+  }));
+  return merged;
+}
+
 function loadProfile() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return buildInitialProfile();
     const parsed = JSON.parse(raw);
-    const merged = { ...buildInitialProfile(), ...parsed };
-    merged.flashcards = (merged.flashcards || []).map((card) => ({
-      cardType: card.source === "mistake" ? "application" : "definition",
-      ...card,
-    }));
-    return merged;
+    return normalizeProfile(parsed);
   } catch {
     return buildInitialProfile();
   }
@@ -834,7 +861,7 @@ const SCENARIO_BLUEPRINTS = [
     optionTypes: (topic) => topic.mode === "agile"
       ? ["servant_leadership", "command_and_control", "replace_team_member", "escalate_too_early"]
       : ["collaborative_resolution", "command_and_control", "replace_team_member", "escalate_too_early"],
-    trap: topic.mode === "agile" ? "command-and-control leadership in Agile" : "reactive people management",
+    trap: "reactive people management",
   },
   {
     key: "value-governance",
