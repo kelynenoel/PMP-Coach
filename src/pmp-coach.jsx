@@ -1,1868 +1,1683 @@
-import { useState, useEffect, useCallback } from "react";
 
-// ─── THEME ───────────────────────────────────────────────────────────────────
-const C={bg:"#05111f",surface:"#091929",card:"#0d2035",border:"#15324f",
-  gold:"#e8a835",goldL:"#f5c96a",accent:"#3d8eff",text:"#dde9f5",
-  muted:"#5d7e9a",ok:"#2ebd7a",err:"#e04f4f",purple:"#7c5cbf",warn:"#d97b35",
-  people:"#3d8eff",process:"#2ebd7a",biz:"#9b6de0"};
-const F={d:"'Playfair Display',Georgia,serif",b:"'DM Sans','Segoe UI',sans-serif"};
-const DC={people:C.people,process:C.process,bizEnv:C.biz};
-const DL={people:"People",process:"Process",bizEnv:"Business Env"};
-const GS=`
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600&display=swap');
-*{box-sizing:border-box;margin:0;padding:0}body{background:#05111f;color:#dde9f5;font-family:'DM Sans','Segoe UI',sans-serif}
-::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:#091929}::-webkit-scrollbar-thumb{background:#15324f;border-radius:3px}
-.shimmer{background:linear-gradient(90deg,#091929 25%,#15324f 50%,#091929 75%);background-size:200% 100%;animation:sh 1.4s infinite}
-@keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
-@keyframes fi{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-@keyframes pulse{0%,100%{opacity:.6}50%{opacity:1}}
-.fi{animation:fi .3s ease both}.pulse{animation:pulse 2s ease infinite}
-`;
+import React, { useEffect, useMemo, useState } from "react";
 
-// ─── STORAGE ─────────────────────────────────────────────────────────────────
-const SK="pmp60v2";
-async function loadProfile(){
-  try{
-    if(window?.storage?.get){
-      const r=await window.storage.get(SK);
-      return r?JSON.parse(r.value):null;
-    }
-    const raw=window.localStorage.getItem(SK);
-    return raw?JSON.parse(raw):null;
-  }catch{return null;}
-}
-async function saveProfile(p){
-  try{
-    if(window?.storage?.set){
-      await window.storage.set(SK,JSON.stringify(p));
-      return;
-    }
-    window.localStorage.setItem(SK,JSON.stringify(p));
-  }catch{}
-}
-function freshProfile(intensity="Standard"){
-  return{
-    startDate:new Date().toISOString().split("T")[0],
-    streak:0,lastStudied:null,
-    readiness:0,
-    domains:{people:0,process:0,bizEnv:0},
-    topicAcc:{},// {topic:{c,t}}
-    weakAreas:[],strongAreas:[],
-    sessionHistory:[],// last 10 summaries
-    flashcards:[],// {q,a,topic,ease:2.5,interval:1,nextReview}
-    totalAnswered:0,
-    totalUniqueAnswered:0,
-    seenQuestionKeys:[],
-    weeklyExams:[],// {day,score,domains}
-    fullExams:[],// {day,score,domains,passProb}
-    preferredIntensity:intensity,
-    lastLesson:null,
-  };
-}
-function getDay(startDate){
-  if(!startDate)return 1;
-  const d=Math.floor((new Date()-new Date(startDate))/(86400000))+1;
-  return Math.min(60,Math.max(1,d));
-}
+const STORAGE_KEY = "pmpCoachFullV1";
 
-function questionKey(q){
-  return `${q.domain||"process"}|${q.topic||"General"}|${q.q}|${(q.choices||[]).join("||")}`;
-}
-function nextFullExamDay(day, fullExams=[]){
-  const schedule=[25,40,55];
-  return schedule.find(d=>day>=d && !fullExams.find(e=>e.day===d)) || null;
-}
-
-function calcReadiness(p){
-  if(p.totalAnswered<5)return p.totalAnswered*3;
-  const avg=(p.domains.people+p.domains.process+p.domains.bizEnv)/3;
-  const vol=Math.min((p.totalUniqueAnswered||p.totalAnswered)/400,1)*15;
-  return Math.round(Math.min(avg*.82+vol,100));
-}
-function getWeakAreas(topicAcc){
-  return Object.entries(topicAcc)
-    .filter(([,v])=>v.t>=3)
-    .sort((a,b)=>(a[1].c/a[1].t)-(b[1].c/b[1].t))
-    .slice(0,3).map(([k])=>k);
-}
-function getStrongAreas(topicAcc){
-  return Object.entries(topicAcc)
-    .filter(([,v])=>v.t>=3&&v.c/v.t>=.8)
-    .sort((a,b)=>(b[1].c/b[1].t)-(a[1].c/a[1].t))
-    .slice(0,2).map(([k])=>k);
-}
-function updateProfile(profile,answers,questions){
-  const p={...profile,topicAcc:{...profile.topicAcc}};
-  const seenSet=new Set(profile.seenQuestionKeys||[]);
-  let dc={people:0,process:0,bizEnv:0},dt={people:0,process:0,bizEnv:0};
-  answers.forEach((a,i)=>{
-    const q=questions[i];if(!q)return;
-    const correct=a===q.correct;
-    const topic=q.topic||"General";
-    if(!p.topicAcc[topic])p.topicAcc[topic]={c:0,t:0};
-    p.topicAcc[topic].t++;
-    if(correct)p.topicAcc[topic].c++;
-    const dom=q.domain||"process";
-    dt[dom]=(dt[dom]||0)+1;
-    if(correct)dc[dom]=(dc[dom]||0)+1;
-  });
-  // Smooth domain scores (EMA)
-  ["people","process","bizEnv"].forEach(d=>{
-    if(dt[d]>0){
-      const sessionScore=Math.round(dc[d]/dt[d]*100);
-      p.domains[d]=p.domains[d]===0?sessionScore:Math.round(p.domains[d]*.7+sessionScore*.3);
-    }
-  });
-  const answeredQuestions=questions.filter((_,i)=>answers[i]!==null);
-  p.totalAnswered+=answeredQuestions.length;
-  answeredQuestions.forEach(q=>seenSet.add(questionKey(q)));
-  p.seenQuestionKeys=[...seenSet].slice(-1000);
-  p.totalUniqueAnswered=seenSet.size;
-  p.weakAreas=getWeakAreas(p.topicAcc);
-  p.strongAreas=getStrongAreas(p.topicAcc);
-  p.readiness=calcReadiness(p);
-  // Streak
-  const today=new Date().toISOString().split("T")[0];
-  const yesterday=new Date(Date.now()-86400000).toISOString().split("T")[0];
-  if(p.lastStudied===yesterday)p.streak++;
-  else if(p.lastStudied!==today)p.streak=1;
-  p.lastStudied=today;
-  return p;
-}
-
-// ─── TOPICS ──────────────────────────────────────────────────────────────────
-const TOPICS=[
-  {name:"Stakeholder Identification & Analysis",domain:"people"},
-  {name:"Stakeholder Engagement & Communication",domain:"people"},
-  {name:"Team Leadership & Servant Leadership",domain:"people"},
-  {name:"Conflict Resolution & Negotiation",domain:"people"},
-  {name:"Team Development & Motivation",domain:"people"},
-  {name:"Emotional Intelligence & Empathy",domain:"people"},
-  {name:"Virtual & Distributed Teams",domain:"people"},
-  {name:"Risk Identification & Assessment",domain:"process"},
-  {name:"Risk Response Planning",domain:"process"},
-  {name:"Change Control & Integrated Change Management",domain:"process"},
-  {name:"Scope Management & WBS",domain:"process"},
-  {name:"Schedule Development & CPM",domain:"process"},
-  {name:"Earned Value Management (EVM)",domain:"process"},
-  {name:"Quality Assurance & Quality Control",domain:"process"},
-  {name:"Procurement & Contract Types",domain:"process"},
-  {name:"Agile & Scrum Delivery",domain:"process"},
-  {name:"Kanban & Flow-Based Methods",domain:"process"},
-  {name:"Hybrid Delivery Approaches",domain:"process"},
-  {name:"Project Monitoring & Controlling",domain:"process"},
-  {name:"Business Case & Benefits Realization",domain:"bizEnv"},
-  {name:"Organizational Strategy & Value Delivery",domain:"bizEnv"},
-  {name:"Governance & Compliance",domain:"bizEnv"},
-  {name:"Organizational Change Management",domain:"bizEnv"},
-  {name:"Portfolio & Program Context",domain:"bizEnv"},
-];
-function selectTopics(profile,count=3){
-  const weak=profile.weakAreas;
-  const weakTopics=TOPICS.filter(t=>weak.includes(t.name));
-  const rest=TOPICS.filter(t=>!weak.includes(t.name));
-  const shuffled=[...weakTopics,...rest.sort(()=>Math.random()-.5)];
-  return shuffled.slice(0,count).map(t=>t.name);
-}
-function getDifficultyFromDay(day,domainScore){
-  if(day<=7||domainScore<40)return"Easy to Medium";
-  if(day<=21||domainScore<60)return"Medium to Hard";
-  if(day<=42||domainScore<75)return"Hard";
-  return"Hard to Exam-level (ambiguous multi-step scenarios)";
-}
-
-// ─── AI / LOCAL GENERATORS ─────────────────────────────────────────────────────
-const TOPIC_DETAILS={
-  "Stakeholder Identification & Analysis":{
-    domain:"people",
-    lessonTitle:"Identify the right stakeholders before you solve the wrong problem",
-    tldr:"A PMP-level project manager first identifies who is affected, what matters to them, and how much influence they have before choosing an action.",
-    keyPoints:[
-      "Map influence, impact, and interest early rather than reacting after resistance appears.",
-      "Separate stakeholder concerns from assumptions; verify what success looks like for each group.",
-      "Tailor communication methods to audience needs instead of sending the same update to everyone.",
-      "On the exam, the best next step usually starts with understanding people before escalating."
-    ],
-    example:"A sponsor asks for a fast rollout, but end users are anxious about workflow disruption. The PM pauses to assess stakeholder needs, then creates a tailored engagement plan before finalizing rollout communications.",
-    mindset:"PMI rewards proactive stakeholder analysis, tailored engagement, and collaboration before escalation or command-and-control responses."
-  },
-  "Stakeholder Engagement & Communication":{
-    domain:"people",
-    lessonTitle:"Engage stakeholders intentionally, not just frequently",
-    tldr:"Good PMP answers focus on the right communication with the right stakeholder at the right time.",
-    keyPoints:[
-      "Communication plans should reflect stakeholder needs, not just project manager habits.",
-      "Resistance often signals a gap in understanding, alignment, or trust.",
-      "Escalation comes after the PM has tried direct engagement, clarification, and collaboration.",
-      "On the exam, 'meet, assess, and align' often beats 'email, announce, and move on.'"
-    ],
-    example:"A department head keeps missing steering updates and later objects to decisions. The PM switches to short decision-focused briefings and confirms their preferred communication format.",
-    mindset:"PMI prefers direct communication, active listening, and stakeholder-specific engagement over passive broadcast updates."
-  },
-  "Team Leadership & Servant Leadership":{
-    domain:"people",
-    lessonTitle:"Lead the team by removing obstacles, not controlling every move",
-    tldr:"Servant leadership means helping the team succeed, coaching them, and clearing impediments so they can deliver value.",
-    keyPoints:[
-      "Support autonomy while ensuring clarity on goals, roles, and priorities.",
-      "Coach first, direct second, and escalate only when needed.",
-      "Build trust by listening, resolving blockers, and protecting the team from unnecessary disruption.",
-      "On the exam, the PM often succeeds by enabling the team rather than micromanaging it."
-    ],
-    example:"A cross-functional team is stuck waiting on approvals. The PM coordinates decision-makers, removes the blocker, and lets the team resume work without dictating technical details.",
-    mindset:"PMI often favors coaching, facilitation, and impediment removal over top-down control."
-  },
-  "Conflict Resolution & Negotiation":{
-    domain:"people",
-    lessonTitle:"Handle conflict early and directly",
-    tldr:"PMP questions usually reward resolving conflict through collaboration and root-cause understanding before formal escalation.",
-    keyPoints:[
-      "Address conflict quickly before positions harden and trust erodes.",
-      "Focus on interests and facts, not personalities.",
-      "Use collaboration first when time and context allow.",
-      "Escalate only after the PM has made a reasonable effort to resolve the issue."
-    ],
-    example:"Two leads disagree on priorities and the team stalls. The PM brings them together, clarifies project objectives, and facilitates a shared decision based on impact and value.",
-    mindset:"PMI generally prefers collaborative problem-solving over avoidance, forcing, or immediate escalation."
-  },
-  "Team Development & Motivation":{
-    domain:"people",
-    lessonTitle:"High-performing teams are built, not assumed",
-    tldr:"A project manager improves delivery by developing team capability, motivation, and trust over time.",
-    keyPoints:[
-      "Identify skills gaps and create opportunities for coaching or training.",
-      "Recognition and clarity can improve motivation as much as process changes.",
-      "Adapt leadership style to team maturity and context.",
-      "Exam answers often favor coaching and development over blame."
-    ],
-    example:"A newer team member keeps missing expectations. The PM pairs them with an experienced teammate and clarifies success criteria instead of immediately escalating performance concerns.",
-    mindset:"PMI likes supportive leadership that builds team performance while maintaining accountability."
-  },
-  "Emotional Intelligence & Empathy":{
-    domain:"people",
-    lessonTitle:"Read the room before you react",
-    tldr:"Emotional intelligence helps the PM understand concerns, manage reactions, and choose the best next conversation.",
-    keyPoints:[
-      "Notice signals like frustration, silence, or defensiveness before they become bigger issues.",
-      "Respond with curiosity and empathy, especially in tense situations.",
-      "Strong PMs manage both stakeholder emotions and their own.",
-      "On the exam, empathy often leads to the most effective next step."
-    ],
-    example:"A product owner becomes defensive in a meeting after a missed deadline. Instead of pushing harder publicly, the PM follows up privately to understand the underlying issue and re-plan support.",
-    mindset:"PMI often rewards self-awareness, empathy, and constructive conversations over public confrontation."
-  },
-  "Virtual & Distributed Teams":{
-    domain:"people",
-    lessonTitle:"Distributed teams need more clarity, not more meetings",
-    tldr:"The PM should reduce confusion in remote teams through explicit agreements, transparent communication, and strong coordination habits.",
-    keyPoints:[
-      "Clarify ownership, norms, and communication channels early.",
-      "Use the right tool for the message: sync for complexity, async for clarity and tracking.",
-      "Build inclusion across time zones and cultures.",
-      "Exam answers often prioritize alignment and visibility for remote teams."
-    ],
-    example:"A global team duplicates work because updates live in private chats. The PM establishes a shared work board, decision log, and explicit handoff rules across time zones.",
-    mindset:"PMI favors structure, clarity, and inclusive communication for distributed delivery."
-  },
-  "Risk Identification & Assessment":{
-    domain:"process",
-    lessonTitle:"Name the risk before it becomes the issue",
-    tldr:"The PM should identify risks early, assess probability and impact, and plan before the problem materializes.",
-    keyPoints:[
-      "Risks are uncertain future events; issues are happening now.",
-      "Risk identification should be continuous, not one-and-done.",
-      "Assess both likelihood and impact so responses match exposure.",
-      "On the exam, the best answer often updates the risk register before acting."
-    ],
-    example:"A vendor has missed two internal milestones but has not yet missed the contract date. The PM logs the schedule risk, assesses impact, and defines response actions before it becomes an issue.",
-    mindset:"PMI likes proactive risk thinking, documented analysis, and planned responses instead of panic reactions."
-  },
-  "Risk Response Planning":{
-    domain:"process",
-    lessonTitle:"A risk plan is only useful if someone can act on it",
-    tldr:"Strong PMP answers choose a response strategy, assign ownership, and plan monitoring.",
-    keyPoints:[
-      "Threat strategies include avoid, mitigate, transfer, and accept.",
-      "Opportunity strategies include exploit, enhance, share, and accept.",
-      "Risk responses should be practical, owned, and time-bound.",
-      "The exam often rewards updating plans and owners before reacting ad hoc."
-    ],
-    example:"A critical supplier may face customs delays. The PM chooses mitigation by ordering earlier, setting checkpoints, and naming an owner to monitor lead times weekly.",
-    mindset:"PMI prefers structured, documented risk responses with clear ownership."
-  },
-  "Change Control & Integrated Change Management":{
-    domain:"process",
-    lessonTitle:"Not every request is a yes, but every request deserves a process",
-    tldr:"When scope, schedule, or cost may change, the PM evaluates impact and follows change control before implementation.",
-    keyPoints:[
-      "Assess impacts across scope, schedule, cost, quality, and risk.",
-      "Do not implement unapproved changes in predictive environments.",
-      "Keep stakeholders informed while following the approved process.",
-      "On the exam, analyze first and route through governance before acting."
-    ],
-    example:"A sponsor asks for an additional reporting feature late in execution. The PM documents the request, performs impact analysis, and presents it through change control before the team starts work.",
-    mindset:"PMI rewards disciplined impact analysis and formal control over informal promise-making."
-  },
-  "Scope Management & WBS":{
-    domain:"process",
-    lessonTitle:"Clear scope prevents late surprises",
-    tldr:"A project manager protects delivery by defining what is included, what is not, and how work is decomposed.",
-    keyPoints:[
-      "A WBS clarifies deliverables and reduces ambiguity.",
-      "Unclear scope leads to rework, conflict, and hidden assumptions.",
-      "Validate understanding early with stakeholders and the team.",
-      "On the exam, clarification and decomposition often come before execution."
-    ],
-    example:"Teams keep interpreting a deliverable differently. The PM updates the scope baseline and decomposes the work so each team understands expected outputs.",
-    mindset:"PMI favors explicit scope definition and shared understanding before more execution starts."
-  },
-  "Schedule Development & CPM":{
-    domain:"process",
-    lessonTitle:"Know the path that controls the finish date",
-    tldr:"The PM should understand dependencies, sequencing, and the critical path before making schedule decisions.",
-    keyPoints:[
-      "Critical path activities have zero or limited float and directly affect finish date.",
-      "Fast tracking and crashing can help, but each adds tradeoffs and risk.",
-      "Schedule compression should follow analysis, not guesswork.",
-      "The exam rewards data-based schedule decisions."
-    ],
-    example:"A customer wants the delivery date moved up by two weeks. The PM analyzes the critical path and evaluates feasible compression options before committing.",
-    mindset:"PMI prefers analysis of dependencies and impacts before changing dates or directing overtime."
-  },
-  "Earned Value Management (EVM)":{
-    domain:"process",
-    lessonTitle:"Use EVM to read the project, not just calculate it",
-    tldr:"EVM helps the PM understand cost and schedule performance so they can make informed decisions.",
-    keyPoints:[
-      "CPI compares earned value to actual cost; SPI compares earned value to planned value.",
-      "A CPI below 1 means over budget; an SPI below 1 means behind schedule.",
-      "Metrics matter most when they guide action.",
-      "On the exam, interpret the numbers before choosing the next step."
-    ],
-    example:"Midway through a project, CPI is 0.82 and SPI is 0.95. The PM reviews root causes and identifies corrective actions rather than reporting metrics alone.",
-    mindset:"PMI wants you to interpret performance data and respond appropriately, not just memorize formulas."
-  },
-  "Quality Assurance & Quality Control":{
-    domain:"process",
-    lessonTitle:"Build quality in before you inspect quality out",
-    tldr:"The PM should improve processes to prevent defects, then use control activities to verify outputs.",
-    keyPoints:[
-      "Quality assurance improves the process; quality control checks the results.",
-      "Prevention is usually cheaper than correction.",
-      "Metrics and root-cause analysis help reduce repeated defects.",
-      "On the exam, improving the process often comes before inspecting more often."
-    ],
-    example:"A team keeps finding the same documentation errors in review. The PM updates the template and checklist, then verifies improvement in the next review cycle.",
-    mindset:"PMI favors prevention, process improvement, and fact-based quality management."
-  },
-  "Procurement & Contract Types":{
-    domain:"process",
-    lessonTitle:"Choose the contract that fits the uncertainty",
-    tldr:"Contract strategy should reflect risk, scope clarity, and who is best positioned to manage uncertainty.",
-    keyPoints:[
-      "Fixed-price is best when scope is clear and stable.",
-      "Cost-reimbursable shifts more uncertainty to the buyer.",
-      "Time and materials works well for uncertain effort with controls in place.",
-      "On the exam, match the contract type to risk allocation and scope maturity."
-    ],
-    example:"A project needs specialized consulting but exact effort is unknown. The PM recommends a time-and-materials agreement with a not-to-exceed cap.",
-    mindset:"PMI prefers intentional procurement choices based on clarity, risk, and control."
-  },
-  "Agile & Scrum Delivery":{
-    domain:"process",
-    lessonTitle:"Deliver value early, then adapt",
-    tldr:"In agile settings, the PM or servant leader supports incremental delivery, rapid feedback, and continuous improvement.",
-    keyPoints:[
-      "The backlog is refined continuously as learning emerges.",
-      "The team should deliver usable value in short cycles.",
-      "Stakeholder feedback should shape future work, not derail the current sprint midstream without process.",
-      "Exam answers often favor transparency, adaptation, and protecting the team."
-    ],
-    example:"A stakeholder wants to add work during a sprint. The PM explains how to capture the request in the backlog and prioritize it for a future sprint unless it is truly urgent and the team agrees on a change.",
-    mindset:"PMI rewards transparency, iterative value delivery, and respect for agile roles and cadence."
-  },
-  "Kanban & Flow-Based Methods":{
-    domain:"process",
-    lessonTitle:"Visualize work to improve flow",
-    tldr:"Kanban helps teams limit work in progress, spot bottlenecks, and improve throughput over time.",
-    keyPoints:[
-      "Visual boards make blockers and aging work easier to see.",
-      "Limiting work in progress improves flow and focus.",
-      "Flow metrics are more useful than opinions when diagnosing bottlenecks.",
-      "On the exam, improve the system before pushing people to work faster."
-    ],
-    example:"A support team has too many items in progress and very little completion. The PM introduces WIP limits and reviews blocked items daily to improve flow.",
-    mindset:"PMI favors managing the workflow, not just urging the team to do more at once."
-  },
-  "Hybrid Delivery Approaches":{
-    domain:"process",
-    lessonTitle:"Use predictive and agile where each fits best",
-    tldr:"Hybrid delivery works when the PM intentionally chooses which parts need stability and which parts benefit from iteration.",
-    keyPoints:[
-      "Not all work on the same project needs the same delivery approach.",
-      "Stable compliance-heavy work may stay predictive while user-facing features iterate.",
-      "Governance still matters even when delivery is adaptive.",
-      "On the exam, hybrid answers succeed when they balance control with flexibility."
-    ],
-    example:"A project has a fixed regulatory deadline but evolving user requirements. The PM uses predictive governance for compliance deliverables and agile iterations for interface design.",
-    mindset:"PMI likes deliberate tailoring rather than forcing one delivery style onto every situation."
-  },
-  "Project Monitoring & Controlling":{
-    domain:"process",
-    lessonTitle:"Monitor to make decisions, not just reports",
-    tldr:"The PM tracks performance so they can detect variance early and take informed corrective action.",
-    keyPoints:[
-      "Compare actual results against baselines or agreed targets.",
-      "Investigate material variances before choosing corrective actions.",
-      "Use trend data to see what is likely to happen next.",
-      "On the exam, analyze the cause before selecting the response."
-    ],
-    example:"Defects and delays rise across two reporting periods. The PM reviews trend data, identifies the root cause, and proposes corrective action to the team and sponsor.",
-    mindset:"PMI rewards fact-based monitoring and thoughtful corrective action."
-  },
-  "Business Case & Benefits Realization":{
-    domain:"bizEnv",
-    lessonTitle:"Projects exist to create business value",
-    tldr:"The PM should understand the business case and keep delivery aligned to intended benefits.",
-    keyPoints:[
-      "A successful project meets more than schedule and budget; it supports intended outcomes.",
-      "Benefits realization often continues beyond project closure.",
-      "Decisions should connect back to value and strategy.",
-      "On the exam, the best answer often protects business value, not just task completion."
-    ],
-    example:"A team proposes a feature that adds complexity but little benefit. The PM compares it against the business case and recommends focusing on higher-value deliverables.",
-    mindset:"PMI favors decisions tied to value, outcomes, and the original business rationale."
-  },
-  "Organizational Strategy & Value Delivery":{
-    domain:"bizEnv",
-    lessonTitle:"Keep the project connected to strategy",
-    tldr:"The PM should understand how the project supports organizational goals so they can prioritize wisely.",
-    keyPoints:[
-      "Strategic alignment helps the PM make better tradeoff decisions.",
-      "Value delivery may require adjusting work when business priorities shift.",
-      "Not every stakeholder request deserves equal weight if it reduces strategic value.",
-      "On the exam, aligning work to organizational goals is often the strongest rationale."
-    ],
-    example:"A requested enhancement would delay launch but does not support the strategic goal the project was funded to achieve. The PM recommends staying aligned to the approved value objective.",
-    mindset:"PMI rewards prioritization that supports enterprise strategy and measurable value."
-  },
-  "Governance & Compliance":{
-    domain:"bizEnv",
-    lessonTitle:"Tailor delivery without ignoring the rules",
-    tldr:"The PM must balance speed and flexibility with governance, regulatory, and compliance requirements.",
-    keyPoints:[
-      "Governance defines decision rights, approvals, and accountability.",
-      "Compliance needs should be built into planning, not bolted on later.",
-      "Escalate when governance or regulatory constraints require formal action.",
-      "On the exam, compliance obligations usually override convenience."
-    ],
-    example:"An agile team wants to skip documentation to move faster, but the product is regulated. The PM adjusts the workflow so compliance deliverables are embedded in the process.",
-    mindset:"PMI favors tailoring within required governance boundaries, not bypassing them."
-  },
-  "Organizational Change Management":{
-    domain:"bizEnv",
-    lessonTitle:"Adoption matters as much as delivery",
-    tldr:"A project is not truly successful if the organization is not ready to use what was delivered.",
-    keyPoints:[
-      "Change impacts processes, roles, habits, and expectations.",
-      "Training and communication should match the groups affected.",
-      "Resistance is managed through engagement, support, and clarity.",
-      "On the exam, adoption planning often comes before declaring success."
-    ],
-    example:"A new system is technically ready, but users are anxious and unprepared. The PM coordinates training, feedback loops, and change champions before go-live.",
-    mindset:"PMI rewards planning for adoption and user readiness, not just technical completion."
-  },
-  "Portfolio & Program Context":{
-    domain:"bizEnv",
-    lessonTitle:"Projects do not operate in isolation",
-    tldr:"The PM should understand how their project connects to broader program and portfolio priorities.",
-    keyPoints:[
-      "Dependencies across projects can affect scope, schedule, and risk.",
-      "Portfolio priorities influence resource decisions and sequencing.",
-      "Escalation may be appropriate when cross-project tradeoffs are needed.",
-      "On the exam, context matters when choosing the best next action."
-    ],
-    example:"A shared resource is reassigned because another strategic project is in crisis. The PM assesses the impact on dependencies and works through governance to re-plan priorities.",
-    mindset:"PMI likes decisions that account for the bigger organizational system, not just the single project."
-  }
+const COLORS = {
+  bg: "#0b1020",
+  panel: "#131a2b",
+  panel2: "#0f1524",
+  text: "#eef3ff",
+  muted: "#a7b1c9",
+  gold: "#f1c75b",
+  green: "#5bd6a6",
+  red: "#ff7e7e",
+  blue: "#67b7ff",
+  border: "#25304a",
+  chip: "#1a2236",
 };
 
-function shuffle(arr){
-  return [...arr].sort(()=>Math.random()-.5);
-}
-function sample(arr, count=1){
-  return shuffle(arr).slice(0,count);
-}
-function getTopicMeta(topicName){
-  return TOPIC_DETAILS[topicName] || {
-    domain:"process",
-    lessonTitle:topicName,
-    tldr:`This lesson focuses on ${topicName} and how to apply PMI-style decision making.`,
-    keyPoints:[
-      `Understand the purpose of ${topicName} before choosing a response.`,
-      `Use data, collaboration, and process discipline when deciding next steps.`,
-      `Tailor communication and delivery based on context and stakeholders.`,
-      `On the exam, choose the answer that is proactive and value-focused.`
+const DOMAIN_WEIGHTS = { people: 42, process: 50, biz: 8 };
+
+const DAY_PLAN = [
+  { title: "Orientation + PMP mindset", domain: "process", mode: "hybrid", focus: ["Ethics", "Mindset", "Exam Structure"], lesson: "PMI tests judgment, not memorization. Choose proactive, ethical, stakeholder-aware actions." },
+  { title: "Projects, programs, portfolios, operations", domain: "process", mode: "predictive", focus: ["Foundations", "Org Structures"], lesson: "Projects are temporary and unique. Operations are ongoing. Authority varies by organizational structure." },
+  { title: "Org structures + PM authority", domain: "people", mode: "predictive", focus: ["Org Structures", "Roles"], lesson: "Know who controls resources in functional, matrix, and projectized structures." },
+  { title: "Code of Ethics + servant leadership", domain: "people", mode: "hybrid", focus: ["Ethics", "Leadership"], lesson: "Responsibility, respect, fairness, and honesty apply in both predictive and agile contexts." },
+  { title: "Value delivery + outcomes vs outputs", domain: "biz", mode: "hybrid", focus: ["Value", "Benefits"], lesson: "PMI cares about value delivered, not just finishing on time and budget." },
+  { title: "EEFs vs OPAs", domain: "process", mode: "predictive", focus: ["Environment", "Knowledge"], lesson: "Respond to EEFs; update OPAs. This distinction is tested often." },
+  { title: "7 project functions + PM roles", domain: "people", mode: "hybrid", focus: ["Functions", "Roles"], lesson: "Functions stay constant across methods; the roles performing them vary by context." },
+  { title: "Principles overview", domain: "process", mode: "hybrid", focus: ["Principles", "Tailoring"], lesson: "The PMBOK 8 structure is principle-based, value-focused, and approach-agnostic." },
+  { title: "Holistic view + systems thinking", domain: "process", mode: "hybrid", focus: ["Principles", "Complexity"], lesson: "Projects are systems. A change in one area affects others." },
+  { title: "Value + quality principles", domain: "biz", mode: "hybrid", focus: ["Value", "Quality"], lesson: "Deliver usable value early and build quality in rather than inspect it in at the end." },
+  { title: "Sustainability + accountable leadership", domain: "people", mode: "hybrid", focus: ["Leadership", "Sustainability"], lesson: "Leaders own decisions, protect ethics, and consider long-term effects." },
+  { title: "Empowered culture + navigate complexity", domain: "people", mode: "agile", focus: ["Culture", "Complexity"], lesson: "Psychological safety, adaptation, and learning matter in complex work." },
+  { title: "Life cycles: predictive, iterative, incremental, agile, hybrid", domain: "process", mode: "hybrid", focus: ["Life Cycles", "Tailoring"], lesson: "Match the approach to uncertainty, volatility, feedback needs, and regulatory constraints." },
+  { title: "Focus areas", domain: "process", mode: "hybrid", focus: ["Focus Areas"], lesson: "Initiating, Planning, Executing, Monitoring & Controlling, and Closing can overlap." },
+  { title: "Governance: charter, PM plan, change control", domain: "process", mode: "predictive", focus: ["Governance", "Change Control"], lesson: "Formal governance defines decisions, baselines, and accountability." },
+  { title: "Integrated change control + CCB", domain: "process", mode: "predictive", focus: ["Governance", "Change Control"], lesson: "Document, review, approve, update baselines, communicate, and verify." },
+  { title: "Scope fundamentals + WBS", domain: "process", mode: "predictive", focus: ["Scope", "WBS"], lesson: "Product scope is what; project scope is work. The WBS supports estimating and control." },
+  { title: "Validate scope vs control scope", domain: "process", mode: "predictive", focus: ["Scope", "Stakeholders"], lesson: "Validate scope is formal acceptance; control scope manages changes and prevents creep." },
+  { title: "Schedule basics + dependencies + critical path", domain: "process", mode: "predictive", focus: ["Schedule", "Network"], lesson: "The critical path determines earliest finish and has zero total float." },
+  { title: "Estimating + PERT + reserve concepts", domain: "process", mode: "predictive", focus: ["Schedule", "Estimation"], lesson: "Use the right estimate for the context and know contingency versus management reserve." },
+  { title: "Cost basics + EVM intro", domain: "process", mode: "predictive", focus: ["Finance", "EVM"], lesson: "Know PV, EV, AC and what CPI and SPI imply." },
+  { title: "Forecasting: EAC, ETC, VAC, TCPI", domain: "process", mode: "predictive", focus: ["Finance", "EVM"], lesson: "Forecasting formulas turn cost data into action." },
+  { title: "Quality management", domain: "process", mode: "hybrid", focus: ["Quality", "Continuous Improvement"], lesson: "Prevention over inspection. In agile, quality is built into every iteration." },
+  { title: "Resources + motivation + conflict", domain: "people", mode: "hybrid", focus: ["Resources", "Conflict"], lesson: "Resolve conflict early and choose the right technique for the situation." },
+  { title: "FULL EXAM 1", domain: "process", mode: "hybrid", focus: ["Full Exam"], lesson: "Take a 180-question exam today." },
+  { title: "Exam review + weak areas", domain: "process", mode: "hybrid", focus: ["Review", "Weak Areas"], lesson: "Use exam results to target the biggest gaps, not to panic." },
+  { title: "Stakeholder identification + engagement", domain: "people", mode: "hybrid", focus: ["Stakeholders", "Communication"], lesson: "Map power, interest, and engagement, then tailor communications." },
+  { title: "Communications planning + channels", domain: "people", mode: "hybrid", focus: ["Communication", "Stakeholders"], lesson: "The right message, audience, timing, and channel matter." },
+  { title: "Risk identification + qualitative analysis", domain: "process", mode: "hybrid", focus: ["Risk"], lesson: "Risks are uncertain events. Issues are happening now." },
+  { title: "Risk response + EMV + escalation", domain: "process", mode: "hybrid", focus: ["Risk", "Quantitative"], lesson: "Threats and opportunities have different responses; escalation is sometimes appropriate." },
+  { title: "Procurement + contracts", domain: "process", mode: "predictive", focus: ["Procurement", "Contracts"], lesson: "Choose the contract type that best allocates risk for the situation." },
+  { title: "Benefits + business environment", domain: "biz", mode: "hybrid", focus: ["Benefits", "Business"], lesson: "Keep the project tied to strategy, compliance, and benefits realization." },
+  { title: "Agile manifesto + values", domain: "people", mode: "agile", focus: ["Agile Mindset"], lesson: "Individuals and interactions, customer collaboration, and responding to change shape agile choices." },
+  { title: "Backlog, refinement, prioritization", domain: "process", mode: "agile", focus: ["Backlog", "Prioritization"], lesson: "Requirements live in the backlog and are refined continuously." },
+  { title: "Scrum roles + events + artifacts", domain: "people", mode: "agile", focus: ["Scrum", "Roles"], lesson: "Know what the Product Owner, Scrum Master, and team own." },
+  { title: "Kanban, flow, WIP, metrics", domain: "process", mode: "agile", focus: ["Kanban", "Flow"], lesson: "Visualize work, limit WIP, and optimize flow." },
+  { title: "Servant leadership + team empowerment", domain: "people", mode: "agile", focus: ["Leadership", "Agile"], lesson: "Remove impediments, coach, and create psychological safety." },
+  { title: "Hybrid tailoring", domain: "process", mode: "hybrid", focus: ["Hybrid", "Tailoring"], lesson: "Combine governance and agility intentionally rather than randomly." },
+  { title: "FULL EXAM 2", domain: "process", mode: "hybrid", focus: ["Full Exam"], lesson: "Take a 180-question exam today." },
+  { title: "Exam review + remediation", domain: "process", mode: "hybrid", focus: ["Review", "Weak Areas"], lesson: "Turn misses into flashcards and targeted drills." },
+  { title: "Agile estimation + velocity", domain: "process", mode: "agile", focus: ["Estimation", "Velocity"], lesson: "Use relative estimation, empirical data, and trends instead of false precision." },
+  { title: "Agile quality + retrospectives", domain: "people", mode: "agile", focus: ["Quality", "Retrospectives"], lesson: "Inspect and adapt frequently; retrospectives change the process, not the product backlog." },
+  { title: "Agile contracts + stakeholder transparency", domain: "biz", mode: "agile", focus: ["Contracts", "Transparency"], lesson: "Invite feedback early and structure contracts to support learning when possible." },
+  { title: "Advanced governance + data/info/reports", domain: "process", mode: "predictive", focus: ["Governance", "Reports"], lesson: "Data becomes information, then reports for stakeholders." },
+  { title: "Advanced change scenarios", domain: "process", mode: "hybrid", focus: ["Change Control", "Agile Change"], lesson: "Predictive changes go through formal control; agile changes are often absorbed through backlog reprioritization." },
+  { title: "Advanced stakeholder conflict", domain: "people", mode: "hybrid", focus: ["Conflict", "Negotiation"], lesson: "Listen, understand interests, and solve for value before escalating." },
+  { title: "Business environment + compliance", domain: "biz", mode: "hybrid", focus: ["Compliance", "Business"], lesson: "Projects must respect regulation, governance, and organizational strategy." },
+  { title: "Critical path + crashing/fast tracking", domain: "process", mode: "predictive", focus: ["Schedule", "Compression"], lesson: "Compress carefully; every tactic creates risk." },
+  { title: "Forecasting mixed questions", domain: "process", mode: "predictive", focus: ["Finance", "Forecasting"], lesson: "Read the scenario closely to know which EAC formula fits." },
+  { title: "Agile scaling + distributed teams", domain: "people", mode: "agile", focus: ["Scaling", "Teams"], lesson: "Scale only as needed and keep transparency high across teams." },
+  { title: "FULL EXAM 3", domain: "process", mode: "hybrid", focus: ["Full Exam"], lesson: "Take your final 180-question exam today." },
+  { title: "Final gap review", domain: "process", mode: "hybrid", focus: ["Review", "Weak Areas"], lesson: "Target the few concepts still causing errors." },
+  { title: "Formula sprint", domain: "process", mode: "predictive", focus: ["Finance", "Schedule"], lesson: "Memorize and apply formulas in context." },
+  { title: "Agile sprint review", domain: "people", mode: "agile", focus: ["Agile", "Mindset"], lesson: "Focus on empiricism, value, team ownership, and adaptation." },
+  { title: "PMI trap review", domain: "people", mode: "hybrid", focus: ["Mindset", "Ethics"], lesson: "Avoid reactive, secretive, or unethical choices." },
+  { title: "Mixed drill day", domain: "process", mode: "hybrid", focus: ["Mixed"], lesson: "Use unseen questions only and close remaining gaps." },
+  { title: "Final readiness check", domain: "biz", mode: "hybrid", focus: ["Readiness"], lesson: "Review patterns, not every note. Trust your process and mindset." },
+  { title: "Exam strategy + confidence", domain: "people", mode: "hybrid", focus: ["Strategy", "Mindset"], lesson: "Stay calm, manage time, and pick the best next action." },
+];
+
+const TOPICS = [
+  {
+    key: "ethics",
+    name: "Ethics and PMI mindset",
+    domain: "people",
+    mode: "hybrid",
+    keywords: ["ethics", "responsibility", "respect", "fairness", "honesty", "mindset"],
+    summary: "Pick proactive, ethical, transparent actions. Refuse unethical asks and escalate appropriately.",
+    points: [
+      "Eliminate unethical choices first.",
+      "Do not hide risks or bad news.",
+      "Choose calm, proactive, stakeholder-aware actions.",
+      "Document and follow process when needed."
     ],
-    example:`A project manager uses ${topicName} concepts to clarify the situation, assess options, and choose the next action that protects project value.`,
-    mindset:"PMI usually prefers proactive analysis, direct communication, collaboration, and documented process over reactive shortcuts."
+    flashcards: [
+      ["PMI Code of Ethics core values", "Responsibility, Respect, Fairness, Honesty."],
+      ["Best PMI mindset shortcut", "Choose the calm, proactive, ethical senior PM action."],
+      ["If asked to hide a known risk", "Refuse, explain, and present the risk with a mitigation plan."],
+    ],
+    distractors: ["hide the issue", "wait and see", "blame a team member"],
+  },
+  {
+    key: "foundations",
+    name: "Projects, programs, portfolios, operations",
+    domain: "process",
+    mode: "predictive",
+    keywords: ["project", "program", "portfolio", "operations"],
+    summary: "Projects are temporary and unique. Operations are ongoing. Programs coordinate related projects; portfolios align work to strategy.",
+    points: [
+      "Projects have a start and end.",
+      "Operations sustain the business.",
+      "Programs coordinate related projects.",
+      "Portfolios optimize strategic investment."
+    ],
+    flashcards: [
+      ["Project", "A temporary endeavor undertaken to create a unique product, service, or result."],
+      ["Operations", "Ongoing work that sustains the organization and has no defined end."],
+      ["Program vs portfolio", "Programs manage related projects for benefits; portfolios align investments to strategy."],
+    ],
+    distractors: ["treat operations as a project", "ignore uniqueness", "confuse program with portfolio"],
+  },
+  {
+    key: "org",
+    name: "Organizational structures and authority",
+    domain: "people",
+    mode: "predictive",
+    keywords: ["functional", "matrix", "projectized", "authority"],
+    summary: "PM authority grows from functional to projectized. Resource control varies by structure.",
+    points: [
+      "Functional = little PM authority.",
+      "Balanced matrix = shared authority.",
+      "Projectized = highest PM authority.",
+      "Structure shapes escalation and staffing."
+    ],
+    flashcards: [
+      ["Weakest PM authority", "Functional organization."],
+      ["Highest PM authority", "Projectized organization."],
+      ["Balanced matrix", "Authority is shared between PM and functional manager."],
+    ],
+    distractors: ["assume PM controls all resources", "ignore functional manager", "escalate without understanding structure"],
+  },
+  {
+    key: "value",
+    name: "Value, benefits, outputs, outcomes",
+    domain: "biz",
+    mode: "hybrid",
+    keywords: ["value", "benefits", "outcomes", "outputs"],
+    summary: "Success is not only time and cost. Outputs should create outcomes that produce benefits and value.",
+    points: [
+      "Outputs are what the project produces.",
+      "Outcomes are changes created by using outputs.",
+      "Benefits flow from outcomes.",
+      "Value is the reason the work matters."
+    ],
+    flashcards: [
+      ["Output vs outcome", "Output = what is produced; outcome = the change that results from using it."],
+      ["Project success from PMI view", "Success depends on value and intended outcomes, not just time/cost."],
+      ["Benefits realization", "The ongoing process of ensuring expected value is achieved from project outputs."],
+    ],
+    distractors: ["measure only schedule", "ignore user adoption", "close project without value check"],
+  },
+  {
+    key: "eefs-opas",
+    name: "EEFs and OPAs",
+    domain: "process",
+    mode: "predictive",
+    keywords: ["eef", "opa", "policies", "lessons learned"],
+    summary: "EEFs are conditions around the project. OPAs are internal assets like templates, procedures, and lessons learned.",
+    points: [
+      "Laws and market conditions are EEFs.",
+      "Templates and procedures are OPAs.",
+      "Lessons learned repositories are OPAs.",
+      "Projects respond to EEFs and can update OPAs."
+    ],
+    flashcards: [
+      ["EEF", "Environmental condition outside the team's direct control, such as regulation or market conditions."],
+      ["OPA", "Organizational asset such as templates, procedures, and knowledge repositories."],
+      ["Can the team update an OPA?", "Yes, for example by adding lessons learned."],
+    ],
+    distractors: ["treat a law as an OPA", "try to change an EEF", "skip lessons learned"],
+  },
+  {
+    key: "functions-roles",
+    name: "Functions, roles, sponsor, Scrum Master, Product Owner",
+    domain: "people",
+    mode: "hybrid",
+    keywords: ["sponsor", "scrum master", "product owner", "roles"],
+    summary: "Functions are universal, but who performs them changes by context. Sponsors authorize and support; Scrum Masters facilitate; Product Owners maximize value.",
+    points: [
+      "Sponsor approves the charter.",
+      "Scrum Master coaches and removes impediments.",
+      "Product Owner prioritizes backlog for value.",
+      "Project manager aligns work and stakeholders."
+    ],
+    flashcards: [
+      ["Who approves the charter?", "The sponsor or authorizing entity, not the PM."],
+      ["Scrum Master", "Servant leader who facilitates and removes impediments but does not direct the team's work."],
+      ["Product Owner", "Represents value and prioritizes the backlog."],
+    ],
+    distractors: ["PM signs the charter", "Scrum Master assigns all tasks", "ignore sponsor role"],
+  },
+  {
+    key: "principles",
+    name: "PMBOK 8 principles and focus areas",
+    domain: "process",
+    mode: "hybrid",
+    keywords: ["principles", "focus areas", "performance domains"],
+    summary: "The standard is principle-based, while the guide operationalizes those principles through performance domains and focus areas.",
+    points: [
+      "Principles guide behavior across contexts.",
+      "Focus areas can overlap.",
+      "Performance domains are interconnected.",
+      "Tailoring is a first-class concept."
+    ],
+    flashcards: [
+      ["Focus areas", "Initiating, Planning, Executing, Monitoring & Controlling, Closing."],
+      ["Tailoring", "Adapting the approach to fit the project's context."],
+      ["PMBOK 8 structure", "Principles + performance domains + focus areas + processes."],
+    ],
+    distractors: ["apply one-size-fits-all", "treat focus areas as phases", "ignore tailoring"],
+  },
+  {
+    key: "life-cycles",
+    name: "Life cycle selection and tailoring",
+    domain: "process",
+    mode: "hybrid",
+    keywords: ["predictive", "iterative", "incremental", "agile", "hybrid"],
+    summary: "Choose the development approach that fits uncertainty, feedback cadence, regulation, and complexity.",
+    points: [
+      "Predictive works well when scope is stable and compliance is high.",
+      "Agile works well with uncertainty and frequent feedback.",
+      "Hybrid fits mixed stability and uncertainty.",
+      "Tailoring is about fit, not fashion."
+    ],
+    flashcards: [
+      ["When is predictive usually strongest?", "When requirements are stable, scope is defined, and control/compliance matter."],
+      ["When is agile usually strongest?", "When requirements are emerging and frequent feedback is needed."],
+      ["Hybrid", "A deliberate combination of predictive and adaptive elements."],
+    ],
+    distractors: ["default to agile always", "ignore regulatory needs", "pick approach without context"],
+  },
+  {
+    key: "governance",
+    name: "Governance, charter, PM plan, change control",
+    domain: "process",
+    mode: "predictive",
+    keywords: ["charter", "pm plan", "governance", "ccb"],
+    summary: "Governance defines decision rights, accountability, and how performance is monitored and controlled.",
+    points: [
+      "The charter authorizes the project and the PM.",
+      "The PM plan integrates subsidiary plans and baselines.",
+      "Changes to baselines require formal review.",
+      "Governance should be right-sized."
+    ],
+    flashcards: [
+      ["Project charter", "Formally authorizes the project and gives the PM authority to apply resources."],
+      ["PM plan", "The integrated document that describes how the project will be executed, monitored, controlled, and closed."],
+      ["CCB", "Formal group responsible for reviewing and deciding on change requests when applicable."],
+    ],
+    distractors: ["change scope informally", "skip sponsor approval", "ignore baselines"],
+  },
+  {
+    key: "scope",
+    name: "Scope, WBS, validate scope, control scope",
+    domain: "process",
+    mode: "predictive",
+    keywords: ["scope", "wbs", "validate", "control"],
+    summary: "Scope clarifies what the project will deliver and the work needed to do it. Validate scope is acceptance; control scope prevents creep.",
+    points: [
+      "Product scope describes features and functions.",
+      "Project scope describes the work to deliver them.",
+      "The WBS decomposes work into manageable packages.",
+      "Formal acceptance differs from change control."
+    ],
+    flashcards: [
+      ["Scope baseline", "Scope statement + WBS + WBS dictionary."],
+      ["Validate scope", "Formal acceptance of completed deliverables."],
+      ["Control scope", "Monitoring scope status and managing changes to the scope baseline."],
+    ],
+    distractors: ["accept deliverables without validation", "add scope without change control", "confuse product and project scope"],
+  },
+  {
+    key: "schedule",
+    name: "Schedule, dependencies, critical path, compression",
+    domain: "process",
+    mode: "predictive",
+    keywords: ["critical path", "float", "dependencies", "crashing", "fast tracking"],
+    summary: "Build realistic schedules, understand critical path and float, and compress carefully when needed.",
+    points: [
+      "Critical path determines shortest project duration.",
+      "Tasks on the critical path have zero total float.",
+      "Crashing adds resources at extra cost.",
+      "Fast tracking overlaps work and increases risk."
+    ],
+    flashcards: [
+      ["Critical path", "The longest duration path through the network; it determines project duration."],
+      ["Crashing", "Adding resources to shorten duration, usually at increased cost."],
+      ["Fast tracking", "Overlapping activities that were planned in sequence, increasing risk."],
+    ],
+    distractors: ["compress noncritical work first", "ignore new risk", "assume all delays matter equally"],
+  },
+  {
+    key: "estimating",
+    name: "Estimating, PERT, reserves",
+    domain: "process",
+    mode: "predictive",
+    keywords: ["pert", "reserve", "contingency", "management reserve"],
+    summary: "Use the right estimating method and know where reserves belong.",
+    points: [
+      "PERT = (O + 4M + P) / 6.",
+      "Contingency reserve is for known-unknowns.",
+      "Management reserve is for unknown-unknowns.",
+      "Estimate progressively when uncertainty is high."
+    ],
+    flashcards: [
+      ["PERT formula", "(Optimistic + 4 × Most Likely + Pessimistic) / 6."],
+      ["Contingency reserve", "Time or money set aside for identified risks."],
+      ["Management reserve", "Reserve for unforeseen work within project scope but outside the performance baseline."],
+    ],
+    distractors: ["use reserve interchangeably", "ignore uncertainty", "present rough estimate as exact"],
+  },
+  {
+    key: "evm",
+    name: "Earned value and forecasting",
+    domain: "process",
+    mode: "predictive",
+    keywords: ["pv", "ev", "ac", "cpi", "spi", "eac", "etc", "vac", "tcpi"],
+    summary: "EVM turns performance data into insight about cost and schedule efficiency and likely outcomes.",
+    points: [
+      "CPI = EV / AC.",
+      "SPI = EV / PV.",
+      "VAC = BAC - EAC.",
+      "Read the scenario before choosing an EAC formula."
+    ],
+    flashcards: [
+      ["CPI", "EV / AC. Greater than 1 means under budget."],
+      ["SPI", "EV / PV. Greater than 1 means ahead of schedule."],
+      ["VAC", "BAC - EAC. Negative means projected over budget."],
+      ["TCPI", "(BAC - EV) / (BAC - AC) or (BAC - EV) / (EAC - AC), depending on the target."],
+    ],
+    distractors: ["swap SPI and CPI", "ignore whether variance is favorable", "choose formula by memory only"],
+  },
+  {
+    key: "quality",
+    name: "Quality and continuous improvement",
+    domain: "process",
+    mode: "hybrid",
+    keywords: ["quality", "qa", "qc", "retrospective"],
+    summary: "Plan quality, build it in, inspect results, and improve the process continuously.",
+    points: [
+      "Prevention is preferred over inspection.",
+      "Manage quality improves the process.",
+      "Control quality checks results.",
+      "Agile teams inspect and adapt frequently."
+    ],
+    flashcards: [
+      ["Quality assurance vs control", "QA improves the process; QC inspects the deliverable/results."],
+      ["Retrospective", "A recurring agile event to improve how the team works."],
+      ["Cost of quality", "Prevention and appraisal costs versus failure costs."],
+    ],
+    distractors: ["inspect quality only at the end", "skip root cause analysis", "treat retrospectives as blame sessions"],
+  },
+  {
+    key: "resources-conflict",
+    name: "Team development, motivation, conflict management",
+    domain: "people",
+    mode: "hybrid",
+    keywords: ["conflict", "team", "motivation", "servant leader"],
+    summary: "Develop the team, resolve conflict early, and remove obstacles so people can do their best work.",
+    points: [
+      "Address conflict, do not ignore it.",
+      "Collaborate/problem solve for lasting solutions.",
+      "Servant leaders enable rather than command.",
+      "Psychological safety helps performance."
+    ],
+    flashcards: [
+      ["Best conflict technique for lasting resolution", "Collaborate / problem solve."],
+      ["Servant leadership", "Lead by serving the team, removing impediments, and enabling performance."],
+      ["Psychological safety", "An environment where team members can speak up without fear."],
+    ],
+    distractors: ["force without context", "avoid indefinitely", "publicly shame team members"],
+  },
+  {
+    key: "stakeholders-comms",
+    name: "Stakeholders and communications",
+    domain: "people",
+    mode: "hybrid",
+    keywords: ["stakeholder", "communication", "channels", "engagement"],
+    summary: "Know who matters, what they need, and how to communicate in the right way at the right time.",
+    points: [
+      "Identify stakeholders early.",
+      "Plan communications by audience and need.",
+      "Monitor engagement and adjust.",
+      "Transparency reduces surprises."
+    ],
+    flashcards: [
+      ["Communication channels formula", "n(n - 1) / 2."],
+      ["Stakeholder engagement plan", "Defines strategies to engage stakeholders effectively."],
+      ["First step when key stakeholder is unhappy", "Understand the issue and review engagement/communication needs."],
+    ],
+    distractors: ["send the same message to everyone", "wait for conflict to grow", "ignore stakeholder power and interest"],
+  },
+  {
+    key: "risk",
+    name: "Risk identification, analysis, responses, EMV",
+    domain: "process",
+    mode: "hybrid",
+    keywords: ["risk", "issue", "emv", "qualitative", "response"],
+    summary: "Risk is uncertain. Identify it, analyze it, choose a response, and revisit it over time.",
+    points: [
+      "Issues are occurring now; risks may happen in the future.",
+      "Threat responses include avoid, mitigate, transfer, accept, escalate.",
+      "Opportunity responses include exploit, enhance, share, accept, escalate.",
+      "EMV = probability × impact."
+    ],
+    flashcards: [
+      ["Risk vs issue", "Risk is uncertain future event; issue is current problem."],
+      ["EMV", "Expected Monetary Value = probability × impact."],
+      ["Threat response examples", "Avoid, mitigate, transfer, accept, escalate."],
+    ],
+    distractors: ["treat issue as risk", "respond without analysis", "hide risk register items"],
+  },
+  {
+    key: "procurement",
+    name: "Procurement and contracts",
+    domain: "process",
+    mode: "predictive",
+    keywords: ["procurement", "contracts", "vendor", "risk allocation"],
+    summary: "Contract choice allocates cost and risk differently across buyer and seller.",
+    points: [
+      "FFP places more cost risk on seller.",
+      "Cost-reimbursable places more risk on buyer.",
+      "T&M is a hybrid contract type.",
+      "Monitor vendor performance and relationships."
+    ],
+    flashcards: [
+      ["Firm Fixed Price", "Seller carries more cost risk because price is fixed."],
+      ["Cost Plus Incentive Fee", "Buyer reimburses costs plus incentive tied to performance."],
+      ["Time and Materials", "Hybrid contract, often used when scope is not fully defined."],
+    ],
+    distractors: ["pick contract without risk lens", "skip procurement management", "ignore relationship management"],
+  },
+  {
+    key: "business",
+    name: "Business environment, benefits, compliance",
+    domain: "biz",
+    mode: "hybrid",
+    keywords: ["business environment", "compliance", "strategy", "benefits"],
+    summary: "Projects operate inside strategy, governance, compliance, and benefits realization systems.",
+    points: [
+      "Connect project decisions to strategy.",
+      "Respect legal and regulatory constraints.",
+      "Track whether outcomes support intended benefits.",
+      "Escalate when business environment changes threaten value."
+    ],
+    flashcards: [
+      ["Business environment domain", "The external and internal context that can affect project value and success."],
+      ["Benefits realization", "Ensuring expected business value is achieved after outputs are delivered."],
+      ["Regulatory change during project", "Assess impact and update plans/governance as needed."],
+    ],
+    distractors: ["ignore strategy", "ship noncompliant work", "focus only on team convenience"],
+  },
+  {
+    key: "agile-mindset",
+    name: "Agile mindset, values, principles",
+    domain: "people",
+    mode: "agile",
+    keywords: ["agile", "manifesto", "values", "principles"],
+    summary: "Agile emphasizes people, collaboration, feedback, adaptation, and early value delivery.",
+    points: [
+      "Respond to change rather than blindly following a plan.",
+      "Collaborate with customers continuously.",
+      "Deliver valuable increments early and often.",
+      "Reflect and improve regularly."
+    ],
+    flashcards: [
+      ["Agile value", "Individuals and interactions over processes and tools."],
+      ["Agile value", "Customer collaboration over contract negotiation."],
+      ["Agile value", "Responding to change over following a plan."],
+    ],
+    distractors: ["freeze scope too early", "optimize documentation over value", "treat retrospectives as optional"],
+  },
+  {
+    key: "backlog",
+    name: "Backlog, refinement, prioritization, user stories",
+    domain: "process",
+    mode: "agile",
+    keywords: ["backlog", "refinement", "user story", "priority"],
+    summary: "In agile, requirements live in the backlog and are refined continuously for clarity and value.",
+    points: [
+      "The Product Owner owns prioritization.",
+      "Refinement improves readiness and understanding.",
+      "User stories express value from a user perspective.",
+      "Definition of Done matters."
+    ],
+    flashcards: [
+      ["Backlog", "Ordered list of work items, requirements, or user stories."],
+      ["Backlog refinement", "Ongoing activity to clarify, size, and reprioritize work items."],
+      ["Definition of Done", "Shared understanding of what complete means for the team."],
+    ],
+    distractors: ["PM reprioritizes backlog alone", "treat backlog as frozen", "start work without clarity"],
+  },
+  {
+    key: "scrum",
+    name: "Scrum roles, events, artifacts",
+    domain: "people",
+    mode: "agile",
+    keywords: ["scrum", "product owner", "scrum master", "daily standup", "review", "retro"],
+    summary: "Scrum has clear roles, events, and artifacts that support empirical delivery and learning.",
+    points: [
+      "Daily standups synchronize work.",
+      "Reviews inspect product increments with stakeholders.",
+      "Retrospectives improve the process.",
+      "The team self-manages its work."
+    ],
+    flashcards: [
+      ["Daily standup purpose", "Synchronize the team and surface impediments."],
+      ["Sprint review purpose", "Inspect the increment with stakeholders and gather feedback."],
+      ["Sprint retrospective purpose", "Improve how the team works."],
+    ],
+    distractors: ["manager runs standup as status meeting", "Scrum Master assigns tasks", "skip review feedback"],
+  },
+  {
+    key: "kanban",
+    name: "Kanban, flow, WIP, cycle time",
+    domain: "process",
+    mode: "agile",
+    keywords: ["kanban", "wip", "flow", "cycle time", "throughput"],
+    summary: "Kanban visualizes work, limits WIP, and aims to improve flow and cycle time.",
+    points: [
+      "Visualize workflow.",
+      "Limit WIP to expose bottlenecks.",
+      "Manage flow, not just activity.",
+      "Use metrics like throughput and cycle time."
+    ],
+    flashcards: [
+      ["WIP", "Work in progress; limiting it helps improve flow."],
+      ["Cycle time", "The elapsed time from starting work to finishing it."],
+      ["Kanban focus", "Optimize flow and visualize constraints."],
+    ],
+    distractors: ["start more work to go faster", "ignore blockers", "use metrics without action"],
+  },
+  {
+    key: "agile-quality",
+    name: "Agile quality, reviews, retrospectives, transparency",
+    domain: "people",
+    mode: "agile",
+    keywords: ["retrospective", "demo", "transparency", "quality"],
+    summary: "Agile teams build quality in, invite feedback early, and use transparency to surface issues quickly.",
+    points: [
+      "Aggressive transparency reveals misalignment early.",
+      "Reviews/demos gather stakeholder input.",
+      "Retrospectives improve the team's process.",
+      "Small batches reduce rework."
+    ],
+    flashcards: [
+      ["Aggressive transparency", "Making work and issues visible early so misalignment is surfaced quickly."],
+      ["Demo/review", "Session for stakeholders to inspect delivered value and give feedback."],
+      ["Small batch delivery", "Frequent increments that reduce risk and speed learning."],
+    ],
+    distractors: ["hide unfinished work", "delay feedback until final release", "treat quality as last-step inspection"],
+  },
+  {
+    key: "hybrid",
+    name: "Hybrid delivery and agile in PMBOK knowledge areas",
+    domain: "process",
+    mode: "hybrid",
+    keywords: ["hybrid", "tailoring", "schedule", "cost", "quality"],
+    summary: "Hybrid combines structure and adaptation. In agile contexts, planning and control still happen, but often in shorter cycles.",
+    points: [
+      "Planning can be iterative within an agile cadence.",
+      "Scope may be managed through backlog reprioritization.",
+      "Cost and schedule may be fixed while scope flexes.",
+      "Governance still matters."
+    ],
+    flashcards: [
+      ["Hybrid hallmark", "A deliberate mix of predictive governance and adaptive delivery."],
+      ["In adaptive projects, do focus areas still apply?", "Yes. Planning and control still happen, often iteratively."],
+      ["When costs are fixed in agile", "Scope and schedule are often adjusted to stay within budget constraints."],
+    ],
+    distractors: ["assume no planning in agile", "drop governance entirely", "mix methods randomly"],
+  },
+];
+
+function starterFlashcardsFromTopics() {
+  const cards = [];
+  TOPICS.forEach((topic) => {
+    topic.flashcards.forEach(([front, back], idx) => {
+      cards.push({
+        id: `starter-${topic.key}-${idx}`,
+        topicKey: topic.key,
+        source: "starter",
+        front,
+        back,
+        ease: 2.5,
+        interval: 0,
+        reps: 0,
+        due: 1,
+        createdDay: 1,
+        lastReviewedDay: null,
+      });
+    });
+  });
+  return cards;
+}
+
+const STARTER_FLASHCARDS = starterFlashcardsFromTopics();
+
+function buildInitialProfile() {
+  return {
+    started: false,
+    startDate: todayString(),
+    currentDayOverride: 1,
+    readiness: 0,
+    totalAnswered: 0,
+    uniqueAnswered: 0,
+    uniqueQuestionIds: [],
+    correctCount: 0,
+    wrongCount: 0,
+    flashcards: STARTER_FLASHCARDS,
+    weakTopics: [],
+    strongTopics: [],
+    questionMissesByTopic: {},
+    sessionHistory: [],
+    examHistory: [],
+    summaryHistory: [],
+    dayCompletions: [],
+    domains: { people: 0, process: 0, biz: 0 },
+    intensity: "Standard",
   };
 }
-function toChoice(letter, text){ return `${letter}. ${text}`; }
 
-function buildWrongAnswers(correctLetter, explanations){
-  const result={};
-  ["A","B","C","D"].forEach((letter, idx)=>{
-    if(letter!==correctLetter) result[letter]=explanations[idx] || "This option skips a better first step for the scenario.";
-  });
-  return result;
+function todayString() {
+  return new Date().toISOString().slice(0, 10);
 }
 
-function questionTemplates(topicName){
-  const meta=getTopicMeta(topicName);
-  const domain=meta.domain;
-  const templates=[
-    () => ({
-      domain,
-      topic: topicName,
-      difficulty: "Medium",
-      q: `During a project, an early warning sign appears related to ${topicName}. What should the project manager do NEXT?`,
-      choices: [
-        toChoice("A","Assess the situation, gather the relevant facts, and update the appropriate project artifact before taking broader action"),
-        toChoice("B","Immediately escalate the concern to the sponsor and request a decision"),
-        toChoice("C","Tell the team to continue as planned until there is more visible impact"),
-        toChoice("D","Implement a workaround without documenting the issue to save time")
-      ],
-      correct: "A",
-      whyCorrect: `This is the best first step because PMP questions usually reward proactive assessment, documentation, and an informed response before escalation. In ${topicName}, the PM should understand the situation and use the right process artifact.`,
-      trap: "Jumping to escalation or action before understanding the issue.",
-      wrongAnswers: {
-        B:"Escalation may be needed later, but it is usually not the first move unless the PM lacks authority or there is an urgent governance issue.",
-        C:"Waiting passively increases the risk that the situation worsens.",
-        D:"Undocumented workarounds create control, quality, and traceability problems."
-      }
-    }),
-    () => ({
-      domain,
-      topic: topicName,
-      difficulty: "Hard",
-      q: `A stakeholder is pressuring the project manager for a quick answer, but the team has raised concerns connected to ${topicName}. What is the BEST action?`,
-      choices: [
-        toChoice("A","Meet with the team and stakeholder, clarify the concern, and align on the best path forward"),
-        toChoice("B","Approve the stakeholder request to preserve the relationship"),
-        toChoice("C","Reject the request because the team is uncomfortable with it"),
-        toChoice("D","Delay the decision until the next status meeting")
-      ],
-      correct: "A",
-      whyCorrect: `The strongest PMP response is collaborative and fact-based. The PM should first clarify the concern and align the right people before deciding. That approach fits ${topicName} and protects both value and relationships.`,
-      trap: "Assuming speed or authority is more important than understanding and alignment.",
-      wrongAnswers: {
-        B:"Saying yes too quickly can create downstream risk or bypass the right process.",
-        C:"A flat rejection without clarification or engagement is too rigid.",
-        D:"Delaying without action increases uncertainty and often makes the issue worse."
-      }
-    }),
-    () => ({
-      domain,
-      topic: topicName,
-      difficulty: "Exam-level",
-      q: `A project has competing priorities, limited time, and a decision involving ${topicName}. The sponsor wants immediate movement, but the best PMP response should balance value, process, and people. What should the project manager do FIRST?`,
-      choices: [
-        toChoice("A","Analyze impact, engage the affected parties, and use the appropriate project process before committing"),
-        toChoice("B","Direct the team to execute the sponsor's request immediately"),
-        toChoice("C","Escalate to governance without attempting to clarify the issue"),
-        toChoice("D","Ask the team to vote on the best option and proceed with the majority choice")
-      ],
-      correct: "A",
-      whyCorrect: `This is the best first action because it balances stakeholder needs, project process, and decision quality. PMI usually rewards analysis and targeted engagement before commitment, especially in questions involving ${topicName}.`,
-      trap: "Confusing urgency with permission to skip analysis or process.",
-      wrongAnswers: {
-        B:"The PM should not commit work immediately without understanding impact and process implications.",
-        C:"Escalation may happen later, but the PM should normally clarify and assess first.",
-        D:"Team input can help, but voting is not the best first step for governance or project decisions."
-      }
-    }),
+function loadProfile() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return buildInitialProfile();
+    const parsed = JSON.parse(raw);
+    return { ...buildInitialProfile(), ...parsed };
+  } catch {
+    return buildInitialProfile();
+  }
+}
+
+function saveProfile(profile) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
+}
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function pct(n, d) {
+  if (!d) return 0;
+  return Math.round((n / d) * 100);
+}
+
+function currentDay(profile) {
+  if (profile.currentDayOverride) return profile.currentDayOverride;
+  const start = new Date(profile.startDate);
+  const now = new Date();
+  const diff = Math.floor((now - start) / 86400000) + 1;
+  return clamp(diff, 1, 60);
+}
+
+function getPlanForDay(day) {
+  return DAY_PLAN[clamp(day, 1, 60) - 1];
+}
+
+function determineIntensityCount(intensity) {
+  if (intensity === "Light") return 8;
+  if (intensity === "Intensive") return 14;
+  return 10;
+}
+
+function examDueDay(day) {
+  return [25, 40, 55].includes(day);
+}
+
+function weeklyExamDue(day) {
+  return day % 7 === 0 && ![25, 40, 55].includes(day);
+}
+
+function topicByKey(key) {
+  return TOPICS.find((t) => t.key === key) || TOPICS[0];
+}
+
+function topicScore(profile, key) {
+  const misses = profile.questionMissesByTopic?.[key]?.misses || 0;
+  const correct = profile.questionMissesByTopic?.[key]?.correct || 0;
+  const total = misses + correct;
+  if (!total) return 60;
+  return Math.round((correct / total) * 100);
+}
+
+function dueFlashcards(profile, day) {
+  return profile.flashcards.filter((c) => (c.due || 1) <= day);
+}
+
+function nextFlashcards(profile, day) {
+  return dueFlashcards(profile, day).slice(0, 12);
+}
+
+function domainCounts(questions) {
+  const counts = { people: 0, process: 0, biz: 0 };
+  questions.forEach((q) => { counts[q.domain] += 1; });
+  return counts;
+}
+
+function weightedReadiness(profile) {
+  const d = profile.domains;
+  const weighted = (d.people * 0.42) + (d.process * 0.5) + (d.biz * 0.08);
+  const volumeBoost = Math.min(15, Math.floor(profile.uniqueAnswered / 30));
+  return clamp(Math.round(weighted + volumeBoost), 0, 100);
+}
+
+const QUESTION_TEMPLATES = [
+  {
+    key: "next-step",
+    stem: (topic) => `You are managing a ${topic.mode} project. A situation related to ${topic.name.toLowerCase()} has created uncertainty. What should the project manager do NEXT?`,
+    correctLabel: "Take the proactive step that applies process and stakeholder awareness.",
+    wrongLabels: [
+      "Wait for more problems before acting.",
+      "Bypass stakeholders or governance to save time.",
+      "Take a reactive action that treats symptoms instead of the cause.",
+    ],
+    build(topic) {
+      return {
+        q: this.stem(topic),
+        correctText: bestActionForTopic(topic),
+        wrongTexts: wrongActionsForTopic(topic),
+        trap: trapForTopic(topic),
+      };
+    },
+  },
+  {
+    key: "scenario",
+    stem: (topic) => `A team working on ${topic.name.toLowerCase()} is struggling because assumptions are not aligned. Which action best reflects PMI thinking?`,
+    build(topic) {
+      return {
+        q: this.stem(topic),
+        correctText: bestActionForTopic(topic),
+        wrongTexts: wrongActionsForTopic(topic),
+        trap: "Picking a fast but shallow response instead of clarifying, collaborating, and applying the right method.",
+      };
+    },
+  },
+  {
+    key: "agile-hybrid",
+    stem: (topic) => `A project contains both stable regulatory work and emerging customer needs. The issue involves ${topic.name.toLowerCase()}. What is the BEST action?`,
+    build(topic) {
+      return {
+        q: this.stem(topic),
+        correctText: hybridAwareActionForTopic(topic),
+        wrongTexts: wrongActionsForTopic(topic),
+        trap: "Forgetting that hybrid projects still need both governance and adaptation.",
+      };
+    },
+  },
+  {
+    key: "principle",
+    stem: (topic) => `Which option best aligns with the principle behind ${topic.name.toLowerCase()}?`,
+    build(topic) {
+      return {
+        q: this.stem(topic),
+        correctText: bestActionForTopic(topic),
+        wrongTexts: wrongActionsForTopic(topic),
+        trap: "Choosing a technically possible action that conflicts with value, ethics, or stakeholder engagement.",
+      };
+    },
+  },
+  {
+    key: "exam-style",
+    stem: (topic) => `During a high-pressure situation involving ${topic.name.toLowerCase()}, four actions are proposed. Which one should the PM choose first?`,
+    build(topic) {
+      return {
+        q: this.stem(topic),
+        correctText: bestActionForTopic(topic),
+        wrongTexts: wrongActionsForTopic(topic),
+        trap: "Escalating or changing course before understanding the issue and using the correct process.",
+      };
+    },
+  },
+];
+
+function bestActionForTopic(topic) {
+  const map = {
+    ethics: "Refuse the unethical request, explain the concern, and escalate appropriately while documenting the issue.",
+    foundations: "Clarify whether the work is a project, program, portfolio component, or operations activity before planning further.",
+    org: "Clarify the organizational structure and engage the right authority for decisions about resources and escalation.",
+    value: "Reconnect the decision to intended outcomes, benefits, and stakeholder value before proceeding.",
+    "eefs-opas": "Identify whether the factor is an EEF or OPA, then update or respond accordingly.",
+    "functions-roles": "Engage the correct role for the decision and clarify responsibilities before taking action.",
+    principles: "Apply the principle-based, tailored response rather than forcing a one-size-fits-all method.",
+    "life-cycles": "Choose or adjust the delivery approach based on uncertainty, feedback needs, and governance requirements.",
+    governance: "Follow governance by documenting the issue, using the correct authority, and updating plans or baselines as needed.",
+    scope: "Clarify scope, review the baseline or backlog, and use the proper acceptance or change mechanism.",
+    schedule: "Analyze dependencies and critical path before compressing or re-sequencing work.",
+    estimating: "Use the appropriate estimation technique and acknowledge uncertainty rather than pretending to have precision.",
+    evm: "Analyze the current metrics first, then forecast and recommend the appropriate corrective action.",
+    quality: "Identify the root cause and improve the process, while also verifying deliverables meet requirements.",
+    "resources-conflict": "Facilitate a collaborative discussion, remove impediments, and support the team toward resolution.",
+    "stakeholders-comms": "Understand stakeholder needs, tailor communication, and engage the right people directly.",
+    risk: "Document the risk or issue correctly, analyze impact, and choose the response that matches the situation.",
+    procurement: "Review contract terms and allocate risk appropriately before making commitments.",
+    business: "Assess strategic, compliance, and benefits implications before deciding.",
+    "agile-mindset": "Increase collaboration and feedback while keeping the team focused on early value delivery.",
+    backlog: "Work with the Product Owner to refine and reprioritize the backlog based on value and readiness.",
+    scrum: "Use the appropriate Scrum role or event to inspect, adapt, and remove impediments.",
+    kanban: "Visualize the bottleneck, limit WIP, and improve flow before starting more work.",
+    "agile-quality": "Increase transparency, inspect the increment, and use retrospectives to improve the process.",
+    hybrid: "Apply governance where needed while using adaptive techniques for uncertain or emerging work.",
+  };
+  return map[topic.key] || "Clarify the issue, engage stakeholders, and choose the proactive, value-focused action.";
+}
+
+function hybridAwareActionForTopic(topic) {
+  if (topic.mode === "predictive") return bestActionForTopic(topic);
+  if (topic.mode === "agile") return `${bestActionForTopic(topic)} Use agile ceremonies, transparency, and short feedback loops.`;
+  return `${bestActionForTopic(topic)} Balance formal governance with flexible delivery where appropriate.`;
+}
+
+function wrongActionsForTopic(topic) {
+  return [
+    topic.distractors?.[0] ? `Ignore the context and ${topic.distractors[0]}.` : "Wait and hope the issue resolves itself.",
+    topic.distractors?.[1] ? `Act quickly but ${topic.distractors[1]}.` : "Skip analysis and make a unilateral decision.",
+    topic.distractors?.[2] ? `Escalate immediately and ${topic.distractors[2]}.` : "Blame the team and avoid the process.",
   ];
-  return templates;
 }
 
-function buildQuestion(topicName, difficultyHint){
-  const qs = questionTemplates(topicName).map(fn=>fn());
-  let preferred = qs.find(q=>q.difficulty===difficultyHint);
-  if(!preferred) preferred = qs[Math.floor(Math.random()*qs.length)];
-  return preferred;
+function trapForTopic(topic) {
+  const map = {
+    ethics: "Thinking sponsor pressure overrides ethics.",
+    foundations: "Confusing temporary project work with ongoing operations.",
+    org: "Ignoring who actually controls resources.",
+    value: "Treating schedule and budget as the only success measures.",
+    "eefs-opas": "Mixing up what the team can update versus what it must respond to.",
+    "life-cycles": "Assuming agile is always best.",
+    governance: "Making baseline changes informally.",
+    scope: "Confusing deliverable acceptance with change control.",
+    schedule: "Compressing work without considering risk or critical path.",
+    evm: "Memorizing formulas without interpreting them.",
+    quality: "Inspecting defects without improving the process.",
+    risk: "Treating an issue like a future risk or vice versa.",
+    "agile-mindset": "Equating agile with no planning or no governance.",
+    scrum: "Using Scrum roles like traditional command-and-control positions.",
+    kanban: "Starting too much work instead of improving flow.",
+    hybrid: "Combining methods randomly instead of intentionally tailoring.",
+  };
+  return map[topic.key] || "Choosing a reactive answer instead of a proactive, structured one.";
 }
 
-function weightedDomainTopics(profile){
-  const weakSet = new Set(profile.weakAreas || []);
-  const sorted = TOPICS.map(t=>({
-    ...t,
-    weight: weakSet.has(t.name) ? 3 : 1
-  }));
-  const bucket=[];
-  sorted.forEach(t=>{
-    for(let i=0;i<t.weight;i++) bucket.push(t);
+function difficultyForDay(day) {
+  if (day <= 10) return "Easy";
+  if (day <= 24) return "Medium";
+  if (day <= 40) return "Hard";
+  return "Exam-level";
+}
+
+function buildQuestionBank() {
+  const bank = [];
+  TOPICS.forEach((topic, topicIndex) => {
+    QUESTION_TEMPLATES.forEach((tpl, tplIndex) => {
+      for (let i = 0; i < 8; i += 1) {
+        const built = tpl.build(topic);
+        const correct = built.correctText;
+        const wrongs = built.wrongTexts.map((w, idx) => `${w} (${variantTag(i, idx)})`);
+        const correctLetterIndex = (topicIndex + tplIndex + i) % 4;
+        const choicesRaw = [];
+        let wrongCursor = 0;
+        for (let c = 0; c < 4; c += 1) {
+          if (c === correctLetterIndex) {
+            choicesRaw.push(correct);
+          } else {
+            choicesRaw.push(wrongs[wrongCursor]);
+            wrongCursor += 1;
+          }
+        }
+        const letters = ["A", "B", "C", "D"];
+        bank.push({
+          id: `q-${topic.key}-${tpl.key}-${i}`,
+          topicKey: topic.key,
+          topicName: topic.name,
+          domain: topic.domain,
+          mode: topic.mode,
+          difficulty: difficultyForDay(1 + ((topicIndex + i) % 60)),
+          q: `${built.q} (${scenarioFlavor(topic, i)})`,
+          choices: choicesRaw.map((txt, idx) => `${letters[idx]}. ${txt}`),
+          correct: letters[correctLetterIndex],
+          whyCorrect: explanationForTopic(topic),
+          trap: built.trap,
+          wrongAnswers: buildWrongExplanations(topic),
+        });
+      }
+    });
   });
-  return bucket;
+  return bank;
 }
 
-function makeLesson(topicName){
-  const meta=getTopicMeta(topicName);
-  return {
-    title: meta.lessonTitle,
-    tldr: meta.tldr,
-    keyPoints: meta.keyPoints,
-    example: meta.example,
-    pmMindset: meta.mindset,
-    focusTopic: topicName
-  };
-}
-
-function difficultyForIndex(idx, total, base){
-  if(base.includes("Easy")) return idx < Math.ceil(total*0.4) ? "Medium" : "Hard";
-  if(base.includes("Exam-level")) return idx < Math.ceil(total*0.25) ? "Hard" : "Exam-level";
-  if(base==="Hard") return idx < Math.ceil(total*0.3) ? "Medium" : "Hard";
-  return idx < Math.ceil(total*0.5) ? "Medium" : "Hard";
-}
-
-async function generateSession(profile,intensity){
-  await new Promise(r=>setTimeout(r,350));
-  const day=getDay(profile.startDate);
-  const topics=selectTopics(profile,3);
-  const qCount=intensity==="Light"?10:intensity==="Intensive"?22:14;
-  const avgDomain=(profile.domains.people+profile.domains.process+profile.domains.bizEnv)/3;
-  const diff=getDifficultyFromDay(day,avgDomain);
-  const domainPool=weightedDomainTopics(profile);
-
-  const questions=[];
-  for(let i=0;i<qCount;i++){
-    const preferredTopic = i < topics.length ? topics[i] : domainPool[Math.floor(Math.random()*domainPool.length)].name;
-    const difficultyHint=difficultyForIndex(i,qCount,diff);
-    questions.push(buildQuestion(preferredTopic,difficultyHint));
-  }
-
-  return {
-    lesson: makeLesson(topics[0]),
-    questions
-  };
-}
-
-async function generateSummary(score,domainScores,weakTopics,intensity,day){
-  await new Promise(r=>setTimeout(r,200));
-  const strengths=[];
-  const improvements=[];
-  const entries=Object.entries(domainScores||{}).filter(([,v])=>typeof v==="number");
-  const best=entries.sort((a,b)=>b[1]-a[1])[0];
-  const worst=entries.sort((a,b)=>a[1]-b[1])[0];
-
-  if(score>=80){
-    strengths.push("You are starting to recognize the PMI-style next step instead of reacting too quickly.");
-    strengths.push("Your choices showed good discipline around analysis, communication, and process.");
-  }else if(score>=65){
-    strengths.push("You are building a solid decision pattern and your instincts are getting closer to PMP logic.");
-    strengths.push("You avoided several common traps like escalating too early or acting without enough information.");
-  }else{
-    strengths.push("You are getting valuable reps, which matters a lot in PMP prep.");
-    strengths.push("You are starting to see where PMI logic differs from real-world shortcuts.");
-  }
-
-  if(best){
-    strengths.push(`Your strongest domain this session was ${DL[best[0]] || best[0]} at ${best[1]}%.`);
-  }
-
-  if(worst){
-    improvements.push(`Spend extra time on ${DL[worst[0]] || worst[0]} questions. Slow down and ask: what should the PM do first, before escalating or implementing?`);
-  }
-  if(weakTopics?.length){
-    improvements.push(`Review ${weakTopics[0]} next. That topic showed up as a recurring gap in this session.`);
-  }
-  improvements.push("When two answer choices seem plausible, choose the one that is more proactive, collaborative, and process-aware.");
-
-  const nextFocus = weakTopics?.[0] || (worst ? (DL[worst[0]] || worst[0]) : "Situational process questions");
-  const readinessImpact =
-    score>=75
-      ? "This session likely moved your readiness upward because you showed stronger judgment and consistency."
-      : score>=60
-      ? "This session helped by exposing your weak spots while reinforcing several strong PMP habits."
-      : "This session still improved your readiness because missed questions created useful feedback and flashcards.";
-
-  return {
-    headline:
-      score>=80
-        ? `Strong work on Day ${day}. You are thinking more like the exam wants you to think.`
-        : score>=65
-        ? `Good progress on Day ${day}. You are getting closer, but a few decision traps still need tightening.`
-        : `This was a useful practice session on Day ${day}. The score is less important than what it exposed.`,
-    strengths: strengths.slice(0,3),
-    improvements: improvements.slice(0,3),
-    nextFocus,
-    mindsetCoach:"Before choosing an answer, ask yourself which option shows the project manager understanding the issue, engaging the right people, and following the right level of process.",
-    readinessImpact
-  };
-}
-
-async function generateExamBatch(profile,batchNum,batchSize,examType){
-  await new Promise(r=>setTimeout(r,250));
-  const domainTargets = [
-    ...Array(Math.round(batchSize*0.42)).fill("people"),
-    ...Array(Math.round(batchSize*0.50)).fill("process"),
-    ...Array(batchSize - Math.round(batchSize*0.42) - Math.round(batchSize*0.50)).fill("bizEnv")
+function scenarioFlavor(topic, i) {
+  const variants = [
+    "A senior stakeholder is frustrated by recent delays.",
+    "The team is distributed and information is incomplete.",
+    "A vendor dependency is affecting confidence.",
+    "Customer feedback has changed what matters most.",
+    "The project is under schedule pressure.",
+    "The work involves compliance requirements.",
+    "A recent review surfaced rework and confusion.",
+    "Multiple teams need coordination before moving forward.",
   ];
-  const poolByDomain = {
-    people: TOPICS.filter(t=>t.domain==="people"),
-    process: TOPICS.filter(t=>t.domain==="process"),
-    bizEnv: TOPICS.filter(t=>t.domain==="bizEnv"),
+  return variants[(topic.key.length + i) % variants.length];
+}
+
+function variantTag(i, idx) {
+  const tags = ["without stakeholder input", "without data", "without following process", "without solving the root cause", "without transparency"];
+  return tags[(i + idx) % tags.length];
+}
+
+function explanationForTopic(topic) {
+  return `${topic.summary} The best PMP answer is the one that is proactive, ethical, stakeholder-aware, and properly tailored to the context.`;
+}
+
+function buildWrongExplanations(topic) {
+  return {
+    A: "Only correct if A is not the correct answer for this item.",
+    B: `This option is weaker because it tends to ignore the core lesson from ${topic.name.toLowerCase()}.`,
+    C: "This option is reactive, bypasses the right process, or fails to engage the right people.",
+    D: "This option focuses on speed or authority rather than value, collaboration, and fit.",
+  };
+}
+
+const QUESTION_BANK = buildQuestionBank();
+
+function chooseQuestionPool(profile, topicKeys, count, day, modes = null) {
+  const seen = new Set(profile.uniqueQuestionIds || []);
+  let pool = QUESTION_BANK.filter((q) => topicKeys.includes(q.topicKey));
+  if (modes?.length) pool = pool.filter((q) => modes.includes(q.mode));
+  const unseen = pool.filter((q) => !seen.has(q.id));
+  const ordered = [...unseen, ...pool.filter((q) => seen.has(q.id))];
+  return ordered.slice(0, count);
+}
+
+function generateDailySession(profile) {
+  const day = currentDay(profile);
+  const plan = getPlanForDay(day);
+  const intensityCount = determineIntensityCount(profile.intensity);
+  const topicKeys = Array.from(new Set([
+    findTopicKeyFromPlan(plan),
+    ...topWeakTopics(profile, 2),
+    ...neighborTopics(findTopicKeyFromPlan(plan), 1),
+  ])).filter(Boolean);
+  const questions = chooseQuestionPool(profile, topicKeys, intensityCount, day);
+  const lessonTopic = topicByKey(topicKeys[0] || "ethics");
+  return {
+    type: "daily",
+    day,
+    lesson: {
+      title: plan.title,
+      tldr: plan.lesson,
+      keyPoints: lessonTopic.points,
+      focusTopic: lessonTopic.name,
+      example: sessionExample(lessonTopic),
+      pmMindset: mindsetForTopic(lessonTopic),
+    },
+    flashcards: buildSessionFlashcards(profile, day, lessonTopic.key),
+    questions,
+  };
+}
+
+function buildSessionFlashcards(profile, day, topicKey) {
+  const due = dueFlashcards(profile, day)
+    .filter((c) => c.topicKey === topicKey || c.source === "mistake")
+    .slice(0, 8);
+  if (due.length >= 6) return due;
+  const starter = profile.flashcards
+    .filter((c) => c.topicKey === topicKey)
+    .filter((c) => !due.some((d) => d.id === c.id))
+    .slice(0, 8 - due.length);
+  return [...due, ...starter].slice(0, 8);
+}
+
+function sessionExample(topic) {
+  const examples = {
+    ethics: "A sponsor asks you to hide a risk before a steering committee meeting.",
+    org: "A functional manager reassigns your key analyst without consulting you.",
+    value: "The system launched on time, but users are not adopting it.",
+    governance: "A stakeholder wants a feature added immediately without a change request.",
+    risk: "A high-impact vendor delay might happen next month.",
+    scrum: "The daily standup has become a manager-led status interrogation.",
+    kanban: "Work items keep piling up in progress and cycle time is rising.",
+    hybrid: "Regulatory documentation is fixed, but customer-facing features need rapid iteration.",
+  };
+  return examples[topic.key] || `A realistic project scenario involving ${topic.name.toLowerCase()}.`;
+}
+
+function mindsetForTopic(topic) {
+  const map = {
+    ethics: "Transparency beats politics.",
+    value: "Value beats vanity metrics.",
+    governance: "Process protects alignment and accountability.",
+    scrum: "Facilitate the team; do not command it.",
+    hybrid: "Tailor deliberately to fit the work.",
+  };
+  return map[topic.key] || "Choose the proactive, stakeholder-aware action first.";
+}
+
+function findTopicKeyFromPlan(plan) {
+  const keywords = (plan.focus || []).map((f) => f.toLowerCase());
+  const match = TOPICS.find((t) => keywords.some((k) => t.name.toLowerCase().includes(k) || t.key.includes(k.replace(/\s+/g, "-"))));
+  return match?.key || "ethics";
+}
+
+function neighborTopics(topicKey, count = 1) {
+  const idx = TOPICS.findIndex((t) => t.key === topicKey);
+  if (idx < 0) return [];
+  const keys = [];
+  for (let i = 1; i <= count; i += 1) {
+    if (TOPICS[idx + i]) keys.push(TOPICS[idx + i].key);
+    if (TOPICS[idx - i]) keys.push(TOPICS[idx - i].key);
+  }
+  return keys;
+}
+
+function topWeakTopics(profile, count = 3) {
+  const entries = TOPICS.map((t) => [t.key, topicScore(profile, t.key)]);
+  entries.sort((a, b) => a[1] - b[1]);
+  return entries.slice(0, count).map(([key]) => key);
+}
+
+function generateExam(profile, examType) {
+  const day = currentDay(profile);
+  const count = examType === "full" ? 180 : 60;
+  const modes = examType === "full" ? null : ["predictive", "agile", "hybrid"];
+  const seen = new Set(profile.uniqueQuestionIds || []);
+  let pool = QUESTION_BANK;
+  if (modes) pool = pool.filter((q) => modes.includes(q.mode));
+  const unseen = pool.filter((q) => !seen.has(q.id));
+  const chosen = [...unseen, ...pool.filter((q) => seen.has(q.id))].slice(0, count);
+  return {
+    type: examType,
+    day,
+    title: examType === "full" ? `Full Exam - Day ${day}` : `Weekly 60Q Exam - Day ${day}`,
+    questions: chosen,
+  };
+}
+
+function buildSummary(result) {
+  const score = result.score;
+  const headline = score >= 80
+    ? "Strong work. You're showing solid PMP judgment."
+    : score >= 65
+    ? "Good progress. You understand the framework and need sharper execution on traps."
+    : "This was a learning set, which is still progress. The misses tell you exactly where to focus next.";
+  return {
+    headline,
+    strengths: result.correctTopics.slice(0, 2).map((t) => `You handled ${topicByKey(t).name.toLowerCase()} questions well.`),
+    improvements: result.weakTopics.slice(0, 3).map((t) => `Review ${topicByKey(t).name.toLowerCase()} and practice more scenario-based questions.`),
+    nextFocus: result.weakTopics[0] ? topicByKey(result.weakTopics[0]).name : "Mixed review",
+    mindsetCoach: "On close calls, choose the action that is proactive, ethical, data-aware, and stakeholder-inclusive.",
+    readinessImpact: score >= 75 ? "This session likely raised your readiness." : "This session exposed gaps that can be converted into fast improvement.",
+  };
+}
+
+function gradeQuestions(questions, answers) {
+  let correct = 0;
+  const topicStats = {};
+  const domainStats = {
+    people: { correct: 0, total: 0 },
+    process: { correct: 0, total: 0 },
+    biz: { correct: 0, total: 0 },
+  };
+  const missed = [];
+  questions.forEach((q) => {
+    const isCorrect = answers[q.id] === q.correct;
+    if (isCorrect) correct += 1;
+    domainStats[q.domain].total += 1;
+    if (isCorrect) domainStats[q.domain].correct += 1;
+
+    if (!topicStats[q.topicKey]) topicStats[q.topicKey] = { correct: 0, total: 0 };
+    topicStats[q.topicKey].total += 1;
+    if (isCorrect) topicStats[q.topicKey].correct += 1;
+    if (!isCorrect) missed.push(q);
+  });
+  const score = pct(correct, questions.length);
+  const weakTopics = Object.entries(topicStats)
+    .sort((a, b) => (a[1].correct / a[1].total) - (b[1].correct / b[1].total))
+    .slice(0, 3)
+    .map(([k]) => k);
+  const correctTopics = Object.entries(topicStats)
+    .sort((a, b) => (b[1].correct / b[1].total) - (a[1].correct / a[1].total))
+    .slice(0, 3)
+    .map(([k]) => k);
+
+  return { score, correct, missed, weakTopics, correctTopics, domainStats };
+}
+
+function addMistakeFlashcards(profile, day, missedQuestions) {
+  const existing = new Set(profile.flashcards.map((f) => f.id));
+  const cards = [];
+  missedQuestions.forEach((q) => {
+    const front = `Why was this best? ${q.q}`;
+    const back = `${q.correct}. ${q.choices.find((c) => c.startsWith(`${q.correct}.`))?.slice(3) || ""} — ${q.whyCorrect}`;
+    const card = {
+      id: `mistake-${q.id}`,
+      topicKey: q.topicKey,
+      source: "mistake",
+      front,
+      back,
+      ease: 2.3,
+      interval: 0,
+      reps: 0,
+      due: day, // immediate availability
+      createdDay: day,
+      lastReviewedDay: null,
+    };
+    if (!existing.has(card.id)) cards.push(card);
+  });
+  return [...profile.flashcards, ...cards];
+}
+
+function updateFlashcard(card, grade, day) {
+  const q = { ...card };
+  const quality = grade === "again" ? 1 : grade === "hard" ? 3 : grade === "good" ? 4 : 5;
+  if (quality < 3) {
+    q.reps = 0;
+    q.interval = 1;
+    q.due = day;
+  } else {
+    q.reps += 1;
+    if (q.reps === 1) q.interval = 1;
+    else if (q.reps === 2) q.interval = 3;
+    else q.interval = Math.round(q.interval * q.ease);
+    q.ease = Math.max(1.3, q.ease + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)));
+    q.due = day + q.interval;
+  }
+  q.lastReviewedDay = day;
+  return q;
+}
+
+function updateProfileAfterAssessment(profile, session, result) {
+  const day = currentDay(profile);
+  const uniqueSet = new Set(profile.uniqueQuestionIds || []);
+  session.questions.forEach((q) => uniqueSet.add(q.id));
+
+  const updatedQuestionMissesByTopic = { ...(profile.questionMissesByTopic || {}) };
+  session.questions.forEach((q) => {
+    const entry = updatedQuestionMissesByTopic[q.topicKey] || { correct: 0, misses: 0 };
+    if (result.missed.some((m) => m.id === q.id)) entry.misses += 1;
+    else entry.correct += 1;
+    updatedQuestionMissesByTopic[q.topicKey] = entry;
+  });
+
+  const dayRecord = { day, type: session.type, score: result.score, total: session.questions.length };
+  const domainScores = {
+    people: pct(result.domainStats.people.correct, result.domainStats.people.total),
+    process: pct(result.domainStats.process.correct, result.domainStats.process.total),
+    biz: pct(result.domainStats.biz.correct, result.domainStats.biz.total),
   };
 
-  return shuffle(domainTargets).map((dom, idx)=>{
-    const topic = sample(poolByDomain[dom],1)[0]?.name || sample(TOPICS,1)[0].name;
-    const difficultyHint = idx < Math.ceil(batchSize*0.35) ? "Hard" : "Exam-level";
-    return buildQuestion(topic, difficultyHint);
-  });
+  const mergedDomains = {
+    people: Math.round(((profile.domains.people || 0) * 0.6) + (domainScores.people * 0.4)),
+    process: Math.round(((profile.domains.process || 0) * 0.6) + (domainScores.process * 0.4)),
+    biz: Math.round(((profile.domains.biz || 0) * 0.6) + (domainScores.biz * 0.4)),
+  };
+
+  const next = {
+    ...profile,
+    totalAnswered: profile.totalAnswered + session.questions.length,
+    uniqueAnswered: uniqueSet.size,
+    uniqueQuestionIds: Array.from(uniqueSet),
+    correctCount: profile.correctCount + result.correct,
+    wrongCount: profile.wrongCount + result.missed.length,
+    questionMissesByTopic: updatedQuestionMissesByTopic,
+    weakTopics: topWeakTopics({ ...profile, questionMissesByTopic: updatedQuestionMissesByTopic }, 5),
+    strongTopics: [...TOPICS]
+      .sort((a, b) => topicScore({ ...profile, questionMissesByTopic: updatedQuestionMissesByTopic }, b.key) - topicScore({ ...profile, questionMissesByTopic: updatedQuestionMissesByTopic }, a.key))
+      .slice(0, 5)
+      .map((t) => t.key),
+    flashcards: addMistakeFlashcards(profile, day, result.missed),
+    sessionHistory: session.type === "daily"
+      ? [...profile.sessionHistory, { day, score: result.score, topics: result.weakTopics, total: session.questions.length }]
+      : profile.sessionHistory,
+    examHistory: session.type !== "daily"
+      ? [...profile.examHistory, { day, type: session.type, score: result.score, total: session.questions.length }]
+      : profile.examHistory,
+    summaryHistory: [...profile.summaryHistory, { day, type: session.type, ...buildSummary(result) }],
+    dayCompletions: [...profile.dayCompletions, dayRecord],
+    domains: mergedDomains,
+  };
+  next.readiness = weightedReadiness(next);
+  return next;
 }
 
-// ─── UI COMPONENTS ────────────────────────────────────────────────────────────
-function Badge({children,color=C.gold,small=false}){
-  return <span style={{background:color+"25",color,border:`1px solid ${color}44`,borderRadius:4,
-    padding:small?"1px 7px":"2px 9px",fontSize:small?10:11,fontWeight:600,letterSpacing:"0.04em",whiteSpace:"nowrap"}}>{children}</span>;
+function advanceDay(profile) {
+  const day = currentDay(profile);
+  return { ...profile, currentDayOverride: clamp(day + 1, 1, 60) };
 }
-function Btn({children,onClick,v="primary",full=false,disabled=false,small=false,s={}}){
-  const base={fontFamily:F.b,fontWeight:600,fontSize:small?12:14,cursor:disabled?"not-allowed":"pointer",
-    border:"none",borderRadius:8,padding:small?"8px 14px":"11px 20px",transition:"all .2s",
-    opacity:disabled ? 0.45 : 1,width:full?"100%":"auto",...s};
-  const vs={primary:{background:`linear-gradient(135deg,${C.gold},#b8821a)`,color:"#060d1a"},
-    sec:{background:"transparent",color:C.text,border:`1px solid ${C.border}`},
-    ghost:{background:"transparent",color:C.muted,padding:small?"6px 10px":"8px 12px"},
-    danger:{background:C.err+"22",color:C.err,border:`1px solid ${C.err}44`},
-    accent:{background:C.accent+"22",color:C.accent,border:`1px solid ${C.accent}44`}};
-  return <button onClick={onClick} disabled={disabled} style={{...base,...vs[v]}}>{children}</button>;
+
+function resetProgress() {
+  localStorage.removeItem(STORAGE_KEY);
+  return buildInitialProfile();
 }
-function PBar({val,max=100,color=C.gold,h=6,label=""}){
-  const pct=Math.min(100,Math.round((val/max)*100));
-  return(
-    <div>
-      {label&&<div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-        <span style={{fontSize:11,color:C.muted}}>{label}</span>
-        <span style={{fontSize:11,color,fontWeight:600}}>{pct}%</span>
-      </div>}
-      <div style={{background:C.border,borderRadius:99,height:h,overflow:"hidden"}}>
-        <div style={{width:`${pct}%`,height:"100%",background:`linear-gradient(90deg,${color},${color}99)`,
-          borderRadius:99,transition:"width .6s ease"}}/>
-      </div>
-    </div>
+
+function Pill({ children, color = COLORS.chip }) {
+  return <span style={{ background: color, border: `1px solid ${COLORS.border}`, borderRadius: 999, padding: "5px 10px", fontSize: 12 }}>{children}</span>;
+}
+
+function Button({ children, onClick, variant = "primary", disabled = false, style = {} }) {
+  const styles = variant === "primary"
+    ? { background: COLORS.gold, color: "#1a1a1a", border: "none" }
+    : variant === "ghost"
+    ? { background: "transparent", color: COLORS.text, border: `1px solid ${COLORS.border}` }
+    : { background: COLORS.panel2, color: COLORS.text, border: `1px solid ${COLORS.border}` };
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...styles,
+        opacity: disabled ? 0.5 : 1,
+        cursor: disabled ? "not-allowed" : "pointer",
+        padding: "12px 16px",
+        borderRadius: 12,
+        fontWeight: 700,
+        fontSize: 14,
+        ...style,
+      }}
+    >
+      {children}
+    </button>
   );
 }
-function ReadinessRing({score}){
-  const r=44,cx=50,cy=50,stroke=7;
-  const circ=2*Math.PI*r;
-  const offset=circ-(score/100)*circ;
-  const color=score>=70?C.ok:score>=45?C.gold:C.err;
-  return(
-    <div style={{position:"relative",width:110,height:110,flexShrink:0}}>
-      <svg width="110" height="110" viewBox="0 0 100 100">
-        <circle cx={cx} cy={cy} r={r} fill="none" stroke={C.border} strokeWidth={stroke}/>
-        <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth={stroke}
-          strokeDasharray={circ} strokeDashoffset={offset}
-          strokeLinecap="round" transform="rotate(-90 50 50)"
-          style={{transition:"stroke-dashoffset .8s ease"}}/>
-      </svg>
-      <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",textAlign:"center"}}>
-        <div style={{fontFamily:F.d,fontSize:22,fontWeight:700,color,lineHeight:1}}>{score}</div>
-        <div style={{fontSize:9,color:C.muted,letterSpacing:"0.06em"}}>READINESS</div>
+
+function Section({ title, right, children }) {
+  return (
+    <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 18, padding: 18, marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <h3 style={{ margin: 0, fontSize: 18 }}>{title}</h3>
+        {right}
       </div>
-    </div>
-  );
-}
-function DomainBar({label,score,color}){
-  return(
-    <div style={{marginBottom:10}}>
-      <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
-        <span style={{fontSize:12,color:C.muted}}>{label}</span>
-        <span style={{fontSize:12,color,fontWeight:600}}>{score}%</span>
-      </div>
-      <div style={{background:C.border,borderRadius:99,height:5,overflow:"hidden"}}>
-        <div style={{width:`${score}%`,height:"100%",background:color,borderRadius:99,transition:"width .6s ease"}}/>
-      </div>
-    </div>
-  );
-}
-function ShimmerBlock({h=48,w="100%",r=10}){
-  return <div className="shimmer" style={{height:h,width:w,borderRadius:r,marginBottom:10}}/>;
-}
-function Section({title,color=C.gold,children}){
-  return(
-    <div style={{marginBottom:24}}>
-      <div style={{fontSize:10,color,fontWeight:700,letterSpacing:"0.15em",textTransform:"uppercase",marginBottom:10}}>{title}</div>
       {children}
     </div>
   );
 }
 
-// ─── SCREENS ─────────────────────────────────────────────────────────────────
+function Dashboard({ profile, onStartSession, onOpenFlashcards, onOpenExam, onAdvanceDay, onReset }) {
+  const day = currentDay(profile);
+  const dueCards = dueFlashcards(profile, day).length;
+  const nextPlan = getPlanForDay(day);
+  const questionGoal = Math.max(400, 540); // Daily + weekly + full exams exceed 400.
+  const nextFull = [25, 40, 55].find((d) => d >= day);
+  const fullTaken = profile.examHistory.filter((e) => e.type === "full").map((e) => e.day);
+  const weeklyDoneToday = profile.examHistory.some((e) => e.type === "weekly" && e.day === day);
+  const fullDoneToday = profile.examHistory.some((e) => e.type === "full" && e.day === day);
 
-// ONBOARDING
-function Onboarding({onStart}){
-  const [intensity,setIntensity]=useState("Standard");
-  const opts=[
-    {id:"Light",icon:"🌱",time:"~30 min/day",q:"10 questions",desc:"Steady daily habit"},
-    {id:"Standard",icon:"⚡",time:"~60 min/day",q:"14 questions",desc:"Recommended pace"},
-    {id:"Intensive",icon:"🔥",time:"~90 min/day",q:"22 questions",desc:"Maximum speed"},
-  ];
-  return(
-    <div className="fi" style={{padding:"40px 24px",maxWidth:480,margin:"0 auto"}}>
-      <div style={{textAlign:"center",marginBottom:36}}>
-        <div style={{fontSize:11,color:C.gold,fontWeight:700,letterSpacing:"0.2em",marginBottom:12,textTransform:"uppercase"}}>PMP 60-Day Program</div>
-        <h1 style={{fontFamily:F.d,fontSize:"clamp(28px,6vw,42px)",color:C.text,lineHeight:1.1,marginBottom:12}}>
-          Your Path to<br/><span style={{color:C.gold}}>Above Target.</span>
-        </h1>
-        <p style={{color:C.muted,fontSize:14,lineHeight:1.7}}>AI-powered adaptive coaching aligned with PMBOK 8 and the PMP Exam Content Outline. Tracks your performance daily and adjusts to close your gaps.</p>
-      </div>
-      <div style={{marginBottom:28}}>
-        <div style={{fontSize:11,color:C.muted,fontWeight:600,letterSpacing:"0.1em",marginBottom:12,textTransform:"uppercase"}}>Study Intensity</div>
-        {opts.map(o=>(
-          <div key={o.id} onClick={()=>setIntensity(o.id)} style={{background:intensity===o.id?C.gold+"18":C.card,
-            border:`1px solid ${intensity===o.id?C.gold:C.border}`,borderRadius:12,padding:"14px 18px",
-            cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",gap:14,transition:"all .2s"}}>
-            <span style={{fontSize:24}}>{o.icon}</span>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:600,fontSize:14,color:C.text}}>{o.id} <span style={{color:C.muted,fontWeight:400}}>· {o.time}</span></div>
-              <div style={{fontSize:12,color:C.muted,marginTop:2}}>{o.q} per session · {o.desc}</div>
-            </div>
-            {intensity===o.id&&<div style={{width:8,height:8,borderRadius:99,background:C.gold,flexShrink:0}}/>}
-          </div>
-        ))}
-      </div>
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 18px",marginBottom:24}}>
-        <div style={{fontSize:11,color:C.gold,fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>WHAT YOU GET</div>
-        {["AI-generated lessons tailored to your gaps","Adaptive questions — harder when you're strong","Spaced repetition flashcards from your mistakes","Weekly 60-question exam simulations","Full 180-question mock exams on Days 25, 40 & 55","400 unique-question tracker + daily readiness across all 3 ECO domains"].map((item,i)=>(
-          <div key={i} style={{display:"flex",gap:8,marginBottom:6}}>
-            <span style={{color:C.ok,flexShrink:0}}>✓</span>
-            <span style={{fontSize:13,color:C.muted}}>{item}</span>
-          </div>
-        ))}
-      </div>
-      <Btn full onClick={()=>onStart(intensity)} s={{padding:"14px 20px",fontSize:15}}>
-        Begin Day 1 →
-      </Btn>
-    </div>
-  );
-}
-
-// DASHBOARD
-function Dashboard({profile,onSession,onFlashcards,onExam}){
-  const day=getDay(profile.startDate);
-  const daysLeft=61-day;
-  const recent=profile.sessionHistory.slice(-3).reverse();
-  const nextFullDay=nextFullExamDay(day, profile.fullExams);
-  const examAvail=!!nextFullDay;
-  const weeklyDue=day>0&&day%7===0&&!profile.weeklyExams.find(e=>e.day===day);
-  const uniquePct=Math.min(100, Math.round(((profile.totalUniqueAnswered||0)/400)*100));
-
-  return(
-    <div className="fi" style={{padding:"20px 20px 80px"}}>
-      {/* Header */}
-      <div style={{marginBottom:20}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
-          <div>
-            <div style={{fontSize:11,color:C.gold,fontWeight:700,letterSpacing:"0.15em",textTransform:"uppercase"}}>Day {day} of 60</div>
-            <div style={{fontFamily:F.d,fontSize:24,color:C.text,lineHeight:1.1,marginTop:2}}>Mission Control</div>
-          </div>
-          <div style={{textAlign:"right"}}>
-            <div style={{fontSize:11,color:C.muted}}>{daysLeft} days left</div>
-            <div style={{display:"flex",alignItems:"center",gap:4,marginTop:4,justifyContent:"flex-end"}}>
-              <span style={{fontSize:14}}>🔥</span>
-              <span style={{fontSize:13,color:C.warn,fontWeight:600}}>{profile.streak} day streak</span>
-            </div>
-          </div>
+  return (
+    <div>
+      <Section
+        title={`Day ${day} of 60`}
+        right={<Pill color={COLORS.gold}>{profile.readiness}% readiness</Pill>}
+      >
+        <div style={{ color: COLORS.muted, marginBottom: 14 }}>{nextPlan.title}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 10, marginBottom: 14 }}>
+          <Stat label="Unique questions" value={`${profile.uniqueAnswered} / ${questionGoal}`} />
+          <Stat label="Flashcards due" value={dueCards} />
+          <Stat label="People" value={`${profile.domains.people}%`} />
+          <Stat label="Process" value={`${profile.domains.process}%`} />
+          <Stat label="Business" value={`${profile.domains.biz}%`} />
+          <Stat label="Full exams taken" value={`${fullTaken.length} / 3`} />
         </div>
-        <div style={{background:C.border,borderRadius:99,height:3,marginTop:12}}>
-          <div style={{width:`${(day/60)*100}%`,height:"100%",background:`linear-gradient(90deg,${C.gold},${C.ok})`,borderRadius:99}}/>
-        </div>
-      </div>
+        <Progress value={profile.uniqueAnswered} max={questionGoal} label="400+ unique question target" />
+      </Section>
 
-      {/* Readiness + Domains */}
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:"20px",marginBottom:16}}>
-        <div style={{display:"flex",gap:20,alignItems:"center"}}>
-          <ReadinessRing score={profile.readiness}/>
-          <div style={{flex:1}}>
-            <div style={{fontSize:11,color:C.muted,fontWeight:600,letterSpacing:"0.1em",marginBottom:12,textTransform:"uppercase"}}>Domain Performance</div>
-            <DomainBar label="People (~42%)" score={profile.domains.people} color={C.people}/>
-            <DomainBar label="Process (~50%)" score={profile.domains.process} color={C.process}/>
-            <DomainBar label="Business Env (~8%→26%)" score={profile.domains.bizEnv} color={C.biz}/>
-          </div>
+      <Section title="Today's plan">
+        <div style={{ color: COLORS.muted, marginBottom: 12 }}>{nextPlan.lesson}</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+          {(nextPlan.focus || []).map((f) => <Pill key={f}>{f}</Pill>)}
+          <Pill>{nextPlan.mode}</Pill>
         </div>
-        {profile.totalAnswered>0&&(
-          <div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${C.border}`,display:"flex",gap:12}}>
-            <div style={{flex:1,textAlign:"center"}}>
-              <div style={{fontFamily:F.d,fontSize:18,color:C.gold}}>{profile.totalAnswered}</div>
-              <div style={{fontSize:10,color:C.muted}}>Questions</div>
-            </div>
-            <div style={{flex:1,textAlign:"center"}}>
-              <div style={{fontFamily:F.d,fontSize:18,color:C.ok}}>{profile.sessionHistory.length}</div>
-              <div style={{fontSize:10,color:C.muted}}>Sessions</div>
-            </div>
-            <div style={{flex:1,textAlign:"center"}}>
-              <div style={{fontFamily:F.d,fontSize:18,color:C.people}}>{profile.flashcards.length}</div>
-              <div style={{fontSize:10,color:C.muted}}>Flashcards</div>
-            </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          <Button onClick={onStartSession}>Start daily session</Button>
+          <Button variant="secondary" onClick={onOpenFlashcards}>Review flashcards</Button>
+          {weeklyExamDue(day) && !weeklyDoneToday && <Button variant="secondary" onClick={() => onOpenExam("weekly")}>Take weekly 60Q exam</Button>}
+          {examDueDay(day) && !fullDoneToday && <Button variant="secondary" onClick={() => onOpenExam("full")}>Take full 180Q exam</Button>}
+        </div>
+      </Section>
+
+      <Section title="Exam cadence">
+        <div style={{ color: COLORS.muted, lineHeight: 1.7 }}>
+          Full exams are scheduled for <strong>Days 25, 40, and 55</strong>. Weekly 60-question exams appear on non-full-exam weeks.
+        </div>
+        <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {[25, 40, 55].map((d) => (
+            <Pill key={d} color={fullTaken.includes(d) ? "#173726" : COLORS.chip}>
+              Day {d} {fullTaken.includes(d) ? "✓" : nextFull === d ? "(next)" : ""}
+            </Pill>
+          ))}
+        </div>
+      </Section>
+
+      <Section title="Weak areas">
+        {profile.weakTopics.length ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {profile.weakTopics.map((k) => <Pill key={k}>{topicByKey(k).name}</Pill>)}
           </div>
+        ) : (
+          <div style={{ color: COLORS.muted }}>Your weak-area profile will fill in as you answer questions.</div>
         )}
-      </div>
+      </Section>
 
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:"16px 18px",marginBottom:16}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-          <div>
-            <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:"0.1em",textTransform:"uppercase"}}>Question Goal</div>
-            <div style={{fontFamily:F.d,fontSize:22,color:C.text}}>{profile.totalUniqueAnswered||0} / 400</div>
+      <Section title="Recent results">
+        {profile.summaryHistory.length ? profile.summaryHistory.slice(-3).reverse().map((s, idx) => (
+          <div key={idx} style={{ borderTop: idx ? `1px solid ${COLORS.border}` : "none", paddingTop: idx ? 12 : 0, marginTop: idx ? 12 : 0 }}>
+            <div style={{ fontWeight: 700 }}>Day {s.day} · {s.type}</div>
+            <div style={{ color: COLORS.muted }}>{s.headline}</div>
+            <div style={{ fontSize: 13, color: COLORS.muted, marginTop: 4 }}>Next focus: {s.nextFocus}</div>
           </div>
-          <Badge color={(profile.totalUniqueAnswered||0)>=400?C.ok:C.gold}>{(profile.totalUniqueAnswered||0)>=400?"Goal Hit":"Keep Going"}</Badge>
-        </div>
-        <PBar val={profile.totalUniqueAnswered||0} max={400} color={(profile.totalUniqueAnswered||0)>=400?C.ok:C.gold}/>
-        <div style={{fontSize:12,color:C.muted,marginTop:8}}>This app tracks unique question prompts so you can make sure you complete at least 400 different questions before test day.</div>
+        )) : <div style={{ color: COLORS.muted }}>No results yet.</div>}
+      </Section>
+
+      <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+        <Button variant="ghost" onClick={onAdvanceDay}>Advance to next day</Button>
+        <Button variant="ghost" onClick={onReset}>Reset app</Button>
       </div>
-
-      {/* Alerts */}
-      {weeklyDue&&(
-        <div style={{background:C.gold+"18",border:`1px solid ${C.gold}55`,borderRadius:12,padding:"12px 16px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <div>
-            <div style={{fontSize:12,fontWeight:600,color:C.gold}}>📋 Weekly Exam Due — Day {day}</div>
-            <div style={{fontSize:12,color:C.muted,marginTop:2}}>60-question simulation to benchmark progress</div>
-          </div>
-          <Btn small v="primary" onClick={()=>onExam("weekly")}>Take Now</Btn>
-        </div>
-      )}
-      {nextFullDay&&(
-        <div style={{background:C.err+"14",border:`1px solid ${C.err}44`,borderRadius:12,padding:"12px 16px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <div>
-            <div style={{fontSize:12,fontWeight:600,color:C.err}}>🎯 Full Exam Due — Day {nextFullDay}</div>
-            <div style={{fontSize:12,color:C.muted,marginTop:2}}>180-question mock exam scheduled for Days 25, 40, and 55</div>
-          </div>
-          <Btn small v="danger" onClick={()=>onExam("full")}>Start Full Exam</Btn>
-        </div>
-      )}
-
-      {/* Weak Areas */}
-      {profile.weakAreas.length>0&&(
-        <div style={{background:C.err+"12",border:`1px solid ${C.err}33`,borderRadius:12,padding:"12px 16px",marginBottom:12}}>
-          <div style={{fontSize:11,color:C.err,fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>⚠ FOCUS AREAS</div>
-          {profile.weakAreas.map((w,i)=>(
-            <div key={i} style={{display:"flex",gap:6,marginBottom:4}}>
-              <span style={{color:C.err,fontSize:11}}>↓</span>
-              <span style={{fontSize:12,color:C.muted}}>{w}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Strong Areas */}
-      {profile.strongAreas.length>0&&(
-        <div style={{background:C.ok+"12",border:`1px solid ${C.ok}33`,borderRadius:12,padding:"12px 16px",marginBottom:12}}>
-          <div style={{fontSize:11,color:C.ok,fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>✓ PERFORMING WELL</div>
-          {profile.strongAreas.map((s,i)=>(
-            <div key={i} style={{display:"flex",gap:6,marginBottom:4}}>
-              <span style={{color:C.ok,fontSize:11}}>↑</span>
-              <span style={{fontSize:12,color:C.muted}}>{s}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Primary CTA */}
-      <Btn full onClick={onSession} s={{padding:"16px 20px",fontSize:16,marginBottom:12}}>
-        👉 Start Today's Session — Day {day}
-      </Btn>
-
-      {/* Secondary Actions */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}}>
-        <button onClick={onFlashcards} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",cursor:"pointer",textAlign:"left",fontFamily:F.b}}>
-          <div style={{fontSize:18,marginBottom:4}}>🃏</div>
-          <div style={{fontSize:13,fontWeight:600,color:C.text}}>Flashcards</div>
-          <div style={{fontSize:11,color:C.muted}}>{profile.flashcards.length} cards</div>
-        </button>
-        <button onClick={()=>onExam("full")} disabled={!examAvail} style={{background:C.card,border:`1px solid ${examAvail?C.border:C.border+"55"}`,borderRadius:10,padding:"12px 14px",cursor:examAvail?"pointer":"not-allowed",textAlign:"left",fontFamily:F.b,opacity:examAvail?1:.5}}>
-          <div style={{fontSize:18,marginBottom:4}}>🎯</div>
-          <div style={{fontSize:13,fontWeight:600,color:C.text}}>Full Exam Sim</div>
-          <div style={{fontSize:11,color:C.muted}}>{examAvail?`180 questions · Due Day ${nextFullDay}`:"Unlocks Day 25"}</div>
-        </button>
-      </div>
-
-      {/* Recent Sessions */}
-      {recent.length>0&&(
-        <Section title="Recent Sessions">
-          {recent.map((s,i)=>(
-            <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div>
-                <div style={{fontSize:13,color:C.text,fontWeight:500}}>Day {s.day} · {s.intensity}</div>
-                <div style={{fontSize:11,color:C.muted,marginTop:2}}>{s.correct}/{s.total} correct</div>
-              </div>
-              <div style={{textAlign:"right"}}>
-                <div style={{fontSize:16,fontWeight:700,color:s.score>=70?C.ok:s.score>=50?C.gold:C.err}}>{s.score}%</div>
-                <div style={{display:"flex",gap:4,marginTop:4,justifyContent:"flex-end"}}>
-                  {s.weakTopics?.slice(0,2).map((t,j)=><Badge key={j} color={C.err} small>{t.split(" ")[0]}</Badge>)}
-                </div>
-              </div>
-            </div>
-          ))}
-        </Section>
-      )}
-
-      {/* Exam History */}
-      {(profile.weeklyExams.length>0||profile.fullExams.length>0)&&(
-        <Section title="Exam History">
-          {profile.weeklyExams.slice(-3).reverse().map((e,i)=>(
-            <div key={`w-${i}`} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{fontSize:12,color:C.muted}}>Weekly Exam · Day {e.day}</div>
-              <div style={{fontSize:15,fontWeight:700,color:e.score>=70?C.ok:e.score>=50?C.gold:C.err}}>{e.score}%</div>
-            </div>
-          ))}
-          {profile.fullExams.slice(-3).reverse().map((e,i)=>(
-            <div key={`f-${i}`} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{fontSize:12,color:C.muted}}>Full Exam · Day {e.day}</div>
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
-                <span style={{fontSize:11,color:C.muted}}>Pass chance {e.passProb||0}%</span>
-                <div style={{fontSize:15,fontWeight:700,color:e.score>=70?C.ok:e.score>=50?C.gold:C.err}}>{e.score}%</div>
-              </div>
-            </div>
-          ))}
-        </Section>
-      )}
     </div>
   );
 }
 
-// SESSION SETUP
-function SessionSetup({profile,onStart,onBack}){
-  const [intensity,setIntensity]=useState(profile.preferredIntensity||"Standard");
-  const day=getDay(profile.startDate);
-  const opts=[
-    {id:"Light",icon:"🌱",time:"~30 min",q:10,desc:"Quick daily habit. 10 questions + focused lesson."},
-    {id:"Standard",icon:"⚡",time:"~60 min",q:14,desc:"Recommended. Lesson + 14 questions + flashcard review."},
-    {id:"Intensive",icon:"🔥",time:"~90 min",q:22,desc:"Deep work. Full lesson + 22 questions + spaced review."},
-  ];
-  const topicPreview=selectTopics(profile,3);
-  return(
-    <div className="fi" style={{padding:"20px 20px 40px"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-        <Btn v="ghost" onClick={onBack}>← Dashboard</Btn>
-        <Badge color={C.gold}>Day {day} of 60</Badge>
-      </div>
-      <h2 style={{fontFamily:F.d,fontSize:22,color:C.text,marginBottom:4}}>Today's Session</h2>
-      <p style={{color:C.muted,fontSize:13,marginBottom:20}}>AI will tailor your lesson and questions based on your performance gaps.</p>
+function Stat({ label, value }) {
+  return (
+    <div style={{ background: COLORS.panel2, border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 12 }}>
+      <div style={{ fontSize: 12, color: COLORS.muted }}>{label}</div>
+      <div style={{ fontWeight: 800, fontSize: 18, marginTop: 4 }}>{value}</div>
+    </div>
+  );
+}
 
-      <Section title="Focus Topics Today">
-        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          {topicPreview.map((t,i)=><Badge key={i} color={i===0?C.gold:C.muted}>{t}</Badge>)}
-          {profile.weakAreas.length>0&&<Badge color={C.err}>+Weak Areas</Badge>}
+function Progress({ value, max, label }) {
+  const pctValue = clamp(Math.round((value / max) * 100), 0, 100);
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: COLORS.muted, marginBottom: 6 }}>
+        <span>{label}</span><span>{pctValue}%</span>
+      </div>
+      <div style={{ height: 10, background: COLORS.panel2, borderRadius: 999, overflow: "hidden", border: `1px solid ${COLORS.border}` }}>
+        <div style={{ width: `${pctValue}%`, height: "100%", background: COLORS.gold }} />
+      </div>
+    </div>
+  );
+}
+
+function DailySession({ profile, session, onSubmit, onCancel }) {
+  const [answers, setAnswers] = useState({});
+  const [cardIndex, setCardIndex] = useState(0);
+  const [showBack, setShowBack] = useState(false);
+
+  const lesson = session.lesson;
+  const flashcards = session.flashcards;
+  const currentCard = flashcards[cardIndex];
+
+  return (
+    <div>
+      <Section title={lesson.title} right={<Pill>{lesson.focusTopic}</Pill>}>
+        <div style={{ color: COLORS.muted, marginBottom: 12 }}>{lesson.tldr}</div>
+        <ul style={{ marginTop: 0, color: COLORS.text, lineHeight: 1.8 }}>
+          {lesson.keyPoints.map((p, idx) => <li key={idx}>{p}</li>)}
+        </ul>
+        <div style={{ background: COLORS.panel2, border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 12, marginTop: 10 }}>
+          <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 4 }}>Example</div>
+          <div>{lesson.example}</div>
+          <div style={{ fontSize: 12, color: COLORS.blue, marginTop: 8 }}>PMI mindset: {lesson.pmMindset}</div>
         </div>
       </Section>
 
-      <Section title="Session Intensity">
-        {opts.map(o=>(
-          <div key={o.id} onClick={()=>setIntensity(o.id)} style={{background:intensity===o.id?C.gold+"15":C.card,
-            border:`1px solid ${intensity===o.id?C.gold:C.border}`,borderRadius:12,padding:"14px 16px",
-            cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",gap:12,transition:"all .2s"}}>
-            <span style={{fontSize:22}}>{o.icon}</span>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:600,fontSize:13,color:C.text}}>{o.id} <span style={{color:C.muted,fontWeight:400}}>· {o.time} · {o.q} questions</span></div>
-              <div style={{fontSize:12,color:C.muted,marginTop:2}}>{o.desc}</div>
+      <Section title={`Flashcards (${flashcards.length})`} right={<Pill>{dueFlashcards(profile, currentDay(profile)).length} due today</Pill>}>
+        {currentCard ? (
+          <div>
+            <div
+              style={{
+                background: COLORS.panel2,
+                border: `1px solid ${COLORS.border}`,
+                borderRadius: 16,
+                padding: 18,
+                minHeight: 120,
+                cursor: "pointer",
+                marginBottom: 12,
+              }}
+              onClick={() => setShowBack(!showBack)}
+            >
+              <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 8 }}>{showBack ? "Back" : "Front"} · tap to flip</div>
+              <div style={{ fontSize: 18, lineHeight: 1.5 }}>{showBack ? currentCard.back : currentCard.front}</div>
             </div>
-            <div style={{width:8,height:8,borderRadius:99,background:intensity===o.id?C.gold:C.border,transition:"background .2s",flexShrink:0}}/>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ color: COLORS.muted, fontSize: 12 }}>Card {cardIndex + 1} of {flashcards.length}</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Button variant="secondary" disabled={cardIndex === 0} onClick={() => { setCardIndex(cardIndex - 1); setShowBack(false); }}>Prev</Button>
+                <Button variant="secondary" disabled={cardIndex === flashcards.length - 1} onClick={() => { setCardIndex(cardIndex + 1); setShowBack(false); }}>Next</Button>
+              </div>
+            </div>
           </div>
-        ))}
+        ) : <div style={{ color: COLORS.muted }}>No flashcards in this session.</div>}
       </Section>
 
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 16px",marginBottom:20}}>
-        <div style={{fontSize:11,color:C.muted,fontWeight:600,letterSpacing:"0.08em",marginBottom:8}}>SESSION FLOW</div>
-        {["📖 Micro Lesson (5–10 min)","❓ Practice Questions with Instant Feedback","🃏 Auto-generated Flashcards from Mistakes","📊 Session Summary & Recommendations"].map((s,i)=>(
-          <div key={i} style={{display:"flex",gap:8,marginBottom:6}}>
-            <span style={{color:C.gold,flexShrink:0,fontSize:11,marginTop:2}}>→</span>
-            <span style={{fontSize:13,color:C.muted}}>{s}</span>
+      <Section title={`Questions (${session.questions.length})`}>
+        {session.questions.map((q, idx) => (
+          <div key={q.id} style={{ borderTop: idx ? `1px solid ${COLORS.border}` : "none", paddingTop: idx ? 16 : 0, marginTop: idx ? 16 : 0 }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+              <Pill>{q.domain}</Pill>
+              <Pill>{q.mode}</Pill>
+              <Pill>{q.difficulty}</Pill>
+              <Pill>{q.topicName}</Pill>
+            </div>
+            <div style={{ fontWeight: 700, marginBottom: 10 }}>{idx + 1}. {q.q}</div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {q.choices.map((choice) => {
+                const letter = choice[0];
+                const selected = answers[q.id] === letter;
+                return (
+                  <label key={choice} style={{
+                    display: "block",
+                    background: selected ? "#1d2b44" : COLORS.panel2,
+                    border: `1px solid ${selected ? COLORS.blue : COLORS.border}`,
+                    borderRadius: 12,
+                    padding: 12,
+                    cursor: "pointer",
+                  }}>
+                    <input
+                      type="radio"
+                      name={q.id}
+                      checked={selected}
+                      onChange={() => setAnswers({ ...answers, [q.id]: letter })}
+                      style={{ marginRight: 8 }}
+                    />
+                    {choice}
+                  </label>
+                );
+              })}
+            </div>
           </div>
         ))}
-      </div>
-      <Btn full onClick={()=>onStart(intensity)} s={{padding:"14px",fontSize:15}}>
-        Generate Session with AI →
-      </Btn>
+        <div style={{ display: "flex", gap: 10, marginTop: 18, flexWrap: "wrap" }}>
+          <Button onClick={() => onSubmit(answers)} disabled={Object.keys(answers).length !== session.questions.length}>Submit session</Button>
+          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+        </div>
+      </Section>
     </div>
   );
 }
 
-// LESSON PHASE
-function LessonPhase({lesson,onContinue}){
-  return(
-    <div className="fi" style={{padding:"20px 20px 40px"}}>
-      <div style={{fontSize:10,color:C.gold,fontWeight:700,letterSpacing:"0.2em",marginBottom:16,textTransform:"uppercase"}}>📖 Micro Lesson</div>
-      <h2 style={{fontFamily:F.d,fontSize:22,color:C.text,lineHeight:1.2,marginBottom:8}}>{lesson.title}</h2>
-      <div style={{background:C.gold+"18",border:`1px solid ${C.gold}44`,borderRadius:10,padding:"12px 14px",marginBottom:20}}>
-        <div style={{fontSize:14,color:C.gold,fontWeight:500,lineHeight:1.6}}>{lesson.tldr}</div>
-      </div>
-      <Section title="Key Points">
-        {lesson.keyPoints.map((p,i)=>(
-          <div key={i} style={{display:"flex",gap:10,marginBottom:10}}>
-            <div style={{width:20,height:20,borderRadius:99,background:C.gold+"25",color:C.gold,fontSize:11,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>{i+1}</div>
-            <span style={{fontSize:13,color:C.muted,lineHeight:1.65}}>{p}</span>
-          </div>
-        ))}
+function ReviewScreen({ resultBundle, onBack }) {
+  const { session, result, summary } = resultBundle;
+  return (
+    <div>
+      <Section title={`${session.type === "daily" ? "Session" : session.type === "full" ? "Full exam" : "Weekly exam"} review`} right={<Pill color={result.score >= 75 ? "#173726" : "#3a1f25"}>{result.score}%</Pill>}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>{summary.headline}</div>
+        <div style={{ color: COLORS.muted }}>Next focus: {summary.nextFocus}</div>
+        <ul style={{ lineHeight: 1.8 }}>
+          {summary.improvements.map((i, idx) => <li key={idx}>{i}</li>)}
+        </ul>
+        <div style={{ color: COLORS.blue, marginTop: 10 }}>{summary.mindsetCoach}</div>
       </Section>
-      <Section title="Real-World Example">
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"14px 16px"}}>
-          <div style={{fontSize:13,color:C.muted,lineHeight:1.7,fontStyle:"italic"}}>{lesson.example}</div>
+
+      <Section title="Missed questions turned into flashcards">
+        <div style={{ color: COLORS.muted }}>
+          {result.missed.length
+            ? `${result.missed.length} missed questions were added as flashcards and are due now.`
+            : "No new mistake flashcards were added because you did not miss any questions."}
         </div>
       </Section>
-      <Section title="PMI Mindset Pattern">
-        <div style={{background:C.purple+"18",border:`1px solid ${C.purple}44`,borderRadius:10,padding:"14px 16px"}}>
-          <div style={{fontSize:11,color:C.purple,fontWeight:700,marginBottom:6,letterSpacing:"0.08em"}}>🧠 THINK LIKE PMI</div>
-          <div style={{fontSize:13,color:C.muted,lineHeight:1.65}}>{lesson.pmMindset}</div>
-        </div>
-      </Section>
-      <Btn full onClick={onContinue} s={{padding:"14px",fontSize:14}}>
-        Ready — Start Questions →
-      </Btn>
-    </div>
-  );
-}
 
-// QUESTION PHASE
-function QuestionPhase({questions,onComplete}){
-  const [qi,setQi]=useState(0);
-  const [answers,setAnswers]=useState([]);
-  const [sel,setSel]=useState(null);
-  const [showReview,setShowReview]=useState(false);
-  const q=questions[qi];
-  const total=questions.length;
-  const correct=answers.filter((a,i)=>a===questions[i]?.correct).length;
-
-  const pick=(ch)=>{
-    if(sel!==null)return;
-    setSel(ch);
-    setShowReview(true);
-  };
-
-  const next=()=>{
-    const newAnswers=[...answers,sel];
-    if(qi+1<total){
-      setAnswers(newAnswers);
-      setQi(qi+1);
-      setSel(null);
-      setShowReview(false);
-    }else{
-      onComplete(newAnswers,questions);
-    }
-  };
-
-  if(!q)return null;
-  const isCorrect=sel&&sel===q.correct;
-  const domColor=DC[q.domain]||C.gold;
-
-  const cc=(ch)=>{
-    if(!sel)return{bg:C.card,br:C.border,col:C.text};
-    if(ch===q.correct)return{bg:C.ok+"22",br:C.ok,col:C.text};
-    if(ch===sel&&ch!==q.correct)return{bg:C.err+"22",br:C.err,col:C.text};
-    return{bg:C.card,br:C.border+"44",col:C.muted};
-  };
-
-  return(
-    <div className="fi" style={{padding:"16px 20px 40px"}}>
-      {/* Progress bar */}
-      <div style={{marginBottom:16}}>
-        <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-          <div style={{display:"flex",gap:6}}>
-            <Badge color={domColor} small>{DL[q.domain]||q.domain}</Badge>
-            <Badge color={C.muted} small>{q.difficulty}</Badge>
-          </div>
-          <span style={{fontSize:12,color:C.muted}}>{qi+1}/{total}</span>
-        </div>
-        <div style={{background:C.border,borderRadius:99,height:4,overflow:"hidden"}}>
-          <div style={{width:`${((qi)/(total))*100}%`,height:"100%",background:`linear-gradient(90deg,${C.gold},${C.ok})`,transition:"width .4s ease"}}/>
-        </div>
-        <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
-          <span style={{fontSize:10,color:C.muted}}>{q.topic}</span>
-          <span style={{fontSize:10,color:correct>=qi*.7?C.ok:C.muted}}>{correct} correct so far</span>
-        </div>
-      </div>
-
-      {/* Question */}
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:"18px 16px",marginBottom:14,fontSize:14,color:C.text,lineHeight:1.75}}>{q.q}</div>
-
-      {/* Choices */}
-      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
-        {q.choices.map((c,i)=>{
-          const col=cc(c);
-          const letter=c.charAt(0);
-          return(
-            <button key={i} onClick={()=>pick(c)} style={{background:col.bg,border:`1px solid ${col.br}`,borderRadius:10,
-              padding:"12px 14px",cursor:sel?"default":"pointer",textAlign:"left",color:col.col,
-              fontFamily:F.b,fontSize:13,lineHeight:1.55,transition:"all .2s",display:"flex",gap:10,alignItems:"flex-start"}}>
-              <span style={{fontWeight:700,flexShrink:0,color:!sel?C.muted:c===q.correct?C.ok:c===sel?C.err:C.muted}}>{letter}.</span>
-              <span>{c.slice(3)}</span>
-              {sel&&c===q.correct&&<span style={{marginLeft:"auto",flexShrink:0,color:C.ok}}>✓</span>}
-              {sel&&c===sel&&c!==q.correct&&<span style={{marginLeft:"auto",flexShrink:0,color:C.err}}>✗</span>}
-            </button>
+      <Section title="Question review">
+        {session.questions.map((q, idx) => {
+          const missed = result.missed.some((m) => m.id === q.id);
+          return (
+            <div key={q.id} style={{ borderTop: idx ? `1px solid ${COLORS.border}` : "none", paddingTop: idx ? 16 : 0, marginTop: idx ? 16 : 0 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                <Pill color={missed ? "#3a1f25" : "#173726"}>{missed ? "Missed" : "Correct"}</Pill>
+                <Pill>{q.topicName}</Pill>
+              </div>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>{idx + 1}. {q.q}</div>
+              <div style={{ color: COLORS.muted, marginBottom: 6 }}>Correct answer: {q.correct}</div>
+              <div>{q.whyCorrect}</div>
+              <div style={{ color: COLORS.blue, marginTop: 6 }}>Trap: {q.trap}</div>
+            </div>
           );
         })}
-      </div>
+      </Section>
 
-      {/* Review Panel */}
-      {showReview&&(
-        <div className="fi">
-          <div style={{background:isCorrect?C.ok+"15":C.err+"15",border:`1px solid ${isCorrect?C.ok:C.err}44`,
-            borderRadius:12,padding:"14px 16px",marginBottom:12}}>
-            <div style={{fontSize:12,fontWeight:700,color:isCorrect?C.ok:C.err,marginBottom:8}}>
-              {isCorrect?"✓ CORRECT":"✗ INCORRECT"} — Correct answer: {q.correct}
+      <Button onClick={onBack}>Back to dashboard</Button>
+    </div>
+  );
+}
+
+function FlashcardScreen({ profile, onSaveProfile, onBack }) {
+  const day = currentDay(profile);
+  const due = useMemo(() => dueFlashcards(profile, day), [profile, day]);
+  const [index, setIndex] = useState(0);
+  const [showBack, setShowBack] = useState(false);
+
+  const card = due[index];
+  function review(grade) {
+    if (!card) return;
+    const updated = profile.flashcards.map((c) => c.id === card.id ? updateFlashcard(c, grade, day) : c);
+    onSaveProfile({ ...profile, flashcards: updated });
+    setShowBack(false);
+    if (index < due.length - 1) setIndex(index + 1);
+  }
+
+  return (
+    <div>
+      <Section title="Flashcards" right={<Pill>{due.length} due</Pill>}>
+        {!card ? (
+          <div>
+            <div style={{ color: COLORS.muted, marginBottom: 12 }}>No cards are due today.</div>
+            <Button onClick={onBack}>Back</Button>
+          </div>
+        ) : (
+          <>
+            <div
+              style={{
+                background: COLORS.panel2,
+                border: `1px solid ${COLORS.border}`,
+                borderRadius: 16,
+                padding: 20,
+                minHeight: 160,
+                cursor: "pointer",
+                marginBottom: 12,
+              }}
+              onClick={() => setShowBack(!showBack)}
+            >
+              <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 8 }}>{showBack ? "Back" : "Front"} · tap to flip</div>
+              <div style={{ fontSize: 20, lineHeight: 1.5 }}>{showBack ? card.back : card.front}</div>
+              <div style={{ marginTop: 10, fontSize: 12, color: COLORS.blue }}>{topicByKey(card.topicKey).name}</div>
             </div>
-            <div style={{fontSize:13,color:C.muted,lineHeight:1.65,marginBottom:10}}>{q.whyCorrect}</div>
-            {!isCorrect&&q.wrongAnswers?.[sel?.charAt(0)]&&(
-              <div style={{paddingTop:8,borderTop:`1px solid ${C.border}`,fontSize:12,color:C.muted}}>
-                <span style={{color:C.err,fontWeight:600}}>Why {sel?.charAt(0)} is wrong: </span>{q.wrongAnswers[sel?.charAt(0)]}
+            <div style={{ display: "flex", justifyContent: "space-between", color: COLORS.muted, fontSize: 12, marginBottom: 14 }}>
+              <span>{index + 1} of {due.length}</span>
+              <span>{card.source === "mistake" ? "Mistake card" : "Starter card"}</span>
+            </div>
+            {showBack && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Button variant="secondary" onClick={() => review("again")}>Again</Button>
+                <Button variant="secondary" onClick={() => review("hard")}>Hard</Button>
+                <Button onClick={() => review("good")}>Good</Button>
+                <Button variant="secondary" onClick={() => review("easy")}>Easy</Button>
               </div>
             )}
-          </div>
-          <div style={{background:C.purple+"15",border:`1px solid ${C.purple}33`,borderRadius:10,padding:"10px 14px",marginBottom:12}}>
-            <span style={{fontSize:11,color:C.purple,fontWeight:700}}>🎯 TRAP: </span>
-            <span style={{fontSize:12,color:C.muted}}>{q.trap}</span>
-          </div>
-          {/* Wrong answer explanations */}
-          {!isCorrect&&(
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",marginBottom:12}}>
-              <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:8}}>ALL ANSWER ANALYSIS</div>
-              {q.choices.filter(c=>c.charAt(0)!==q.correct).map((c,i)=>(
-                <div key={i} style={{marginBottom:6}}>
-                  <span style={{fontSize:12,color:C.err,fontWeight:600}}>{c.charAt(0)}: </span>
-                  <span style={{fontSize:12,color:C.muted}}>{q.wrongAnswers?.[c.charAt(0)]||"Incorrect for this scenario."}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          <Btn full onClick={next} s={{padding:"12px",fontSize:13}}>
-            {qi+1<total?"Next Question →":"Complete Session →"}
-          </Btn>
-        </div>
-      )}
+          </>
+        )}
+      </Section>
+      <Button variant="ghost" onClick={onBack}>Back to dashboard</Button>
     </div>
   );
 }
 
-// SESSION SUMMARY
-function SessionSummary({score,correct,total,summary,newFlashcards,weakTopics,onDone,loading}){
-  const color=score>=70?C.ok:score>=50?C.gold:C.err;
-  const grade=score>=80?"Above Target 🌟":score>=70?"On Target ✓":score>=50?"Needs Work ⚡":"Below Target ⚠";
-  return(
-    <div className="fi" style={{padding:"20px 20px 60px"}}>
-      <div style={{textAlign:"center",marginBottom:24}}>
-        <div style={{fontSize:11,color:C.gold,fontWeight:700,letterSpacing:"0.15em",marginBottom:8,textTransform:"uppercase"}}>Session Complete</div>
-        <div style={{fontFamily:F.d,fontSize:56,color,lineHeight:1,marginBottom:4}}>{score}<span style={{fontSize:24}}>%</span></div>
-        <div style={{fontSize:14,color:C.muted}}>{correct} of {total} correct · <span style={{color}}>{grade}</span></div>
-      </div>
-
-      {loading?(
-        <div style={{padding:"20px 0"}}>
-          <ShimmerBlock h={80}/><ShimmerBlock h={60}/><ShimmerBlock h={60}/>
-          <div style={{fontSize:12,color:C.muted,textAlign:"center"}}>Coach analyzing your session...</div>
+function ExamIntro({ type, onStart, onBack }) {
+  return (
+    <div>
+      <Section title={type === "full" ? "Full 180-question exam" : "Weekly 60-question exam"}>
+        <div style={{ color: COLORS.muted, lineHeight: 1.8, marginBottom: 12 }}>
+          {type === "full"
+            ? "This exam uses 180 questions and counts toward your unique-question goal. Full exams are scheduled for Days 25, 40, and 55."
+            : "This weekly exam uses 60 questions and mixes predictive, agile, and hybrid scenarios."}
         </div>
-      ):summary&&(
-        <>
-          <div style={{background:C.card,border:`1px solid ${color}44`,borderRadius:14,padding:"16px 18px",marginBottom:16}}>
-            <div style={{fontSize:14,color:C.text,lineHeight:1.65,marginBottom:12,fontStyle:"italic"}}>"{summary.headline}"</div>
-            <div style={{fontSize:11,color:C.ok,fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>STRENGTHS</div>
-            {summary.strengths?.map((s,i)=>(
-              <div key={i} style={{display:"flex",gap:8,marginBottom:6}}>
-                <span style={{color:C.ok,flexShrink:0}}>✓</span>
-                <span style={{fontSize:12,color:C.muted}}>{s}</span>
-              </div>
-            ))}
-          </div>
-
-          {summary.improvements?.length>0&&(
-            <div style={{background:C.err+"12",border:`1px solid ${C.err}33`,borderRadius:12,padding:"14px 16px",marginBottom:14}}>
-              <div style={{fontSize:11,color:C.err,fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>IMPROVEMENT AREAS</div>
-              {summary.improvements.map((imp,i)=>(
-                <div key={i} style={{display:"flex",gap:8,marginBottom:6}}>
-                  <span style={{color:C.err,flexShrink:0}}>→</span>
-                  <span style={{fontSize:12,color:C.muted}}>{imp}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div style={{background:C.purple+"15",border:`1px solid ${C.purple}33`,borderRadius:12,padding:"14px 16px",marginBottom:14}}>
-            <div style={{fontSize:11,color:C.purple,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>🧠 MINDSET COACHING</div>
-            <div style={{fontSize:12,color:C.muted,lineHeight:1.65}}>{summary.mindsetCoach}</div>
-          </div>
-
-          <div style={{background:C.gold+"12",border:`1px solid ${C.gold}33`,borderRadius:12,padding:"12px 16px",marginBottom:16}}>
-            <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:4}}>NEXT SESSION FOCUS</div>
-            <div style={{fontSize:13,color:C.text}}>{summary.nextFocus}</div>
-          </div>
-        </>
-      )}
-
-      {newFlashcards?.length>0&&(
-        <div style={{background:C.accent+"12",border:`1px solid ${C.accent}33`,borderRadius:12,padding:"12px 16px",marginBottom:16}}>
-          <div style={{fontSize:11,color:C.accent,fontWeight:700,marginBottom:4}}>🃏 {newFlashcards.length} NEW FLASHCARDS ADDED</div>
-          <div style={{fontSize:12,color:C.muted}}>From your missed questions — review them in the Flashcard deck.</div>
-        </div>
-      )}
-
-      <Btn full onClick={onDone} s={{padding:"14px",fontSize:14}}>
-        Back to Dashboard
-      </Btn>
+        <Button onClick={onStart}>Start exam</Button>
+      </Section>
+      <Button variant="ghost" onClick={onBack}>Back</Button>
     </div>
   );
 }
 
-// FLASHCARD DECK
-function FlashcardDeck({profile,onBack,onUpdate}){
-  const [idx,setIdx]=useState(0);
-  const [flip,setFlip]=useState(false);
-  const [filter,setFilter]=useState("all");
-  const today=new Date().toISOString().split("T")[0];
-  const due=profile.flashcards.filter(c=>!c.nextReview||c.nextReview<=today);
-  const deck=filter==="due"?due:profile.flashcards;
+export default function App() {
+  const [profile, setProfile] = useState(loadProfile);
+  const [screen, setScreen] = useState("dashboard");
+  const [activeSession, setActiveSession] = useState(null);
+  const [reviewBundle, setReviewBundle] = useState(null);
+  const [examType, setExamType] = useState("weekly");
 
-  const handleSM2=(card,quality)=>{
-    // Simplified SM-2
-    let ease=card.ease||2.5;
-    let interval=card.interval||1;
-    if(quality>=3){
-      interval=interval<=1?4:interval<=4?6:Math.round(interval*ease);
-      ease=Math.max(1.3,ease+(0.1-(5-quality)*(0.08+(5-quality)*0.02)));
-    }else{interval=1;}
-    const nr=new Date(Date.now()+interval*86400000).toISOString().split("T")[0];
-    return{...card,ease,interval,nextReview:nr,lastReview:today};
-  };
+  useEffect(() => { saveProfile(profile); }, [profile]);
 
-  const rate=(q)=>{
-    if(idx>=deck.length)return;
-    const card=deck[idx];
-    const updated=handleSM2(card,q);
-    const newCards=profile.flashcards.map(c=>c.q===card.q?updated:c);
-    onUpdate({...profile,flashcards:newCards});
-    setIdx(idx+1);
-    setFlip(false);
-  };
+  const day = currentDay(profile);
 
-  if(deck.length===0)return(
-    <div className="fi" style={{padding:"40px 24px",textAlign:"center"}}>
-      <Btn v="ghost" onClick={onBack} s={{marginBottom:24}}>← Back</Btn>
-      <div style={{fontSize:40,marginBottom:16}}>🃏</div>
-      <h2 style={{fontFamily:F.d,fontSize:20,color:C.text,marginBottom:8}}>No Flashcards Yet</h2>
-      <p style={{color:C.muted,fontSize:13}}>Flashcards are auto-generated from questions you miss during sessions. Complete a few sessions to build your deck.</p>
-    </div>
-  );
+  function startDaily() {
+    const session = generateDailySession(profile);
+    setActiveSession(session);
+    setScreen("daily");
+  }
 
-  const card=deck[idx%deck.length];
-  const done=idx>=deck.length;
+  function submitSession(answers) {
+    const result = gradeQuestions(activeSession.questions, answers);
+    const nextProfile = updateProfileAfterAssessment(profile, activeSession, result);
+    setProfile(nextProfile);
+    setReviewBundle({ session: activeSession, result, summary: buildSummary(result) });
+    setScreen("review");
+    setActiveSession(null);
+  }
 
-  return(
-    <div className="fi" style={{padding:"20px 20px 60px"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-        <Btn v="ghost" onClick={onBack}>← Back</Btn>
-        <div style={{display:"flex",gap:6}}>
-          <Badge color={C.ok}>{due.length} due</Badge>
-          <Badge color={C.muted}>{profile.flashcards.length} total</Badge>
-        </div>
-      </div>
-      <div style={{display:"flex",gap:8,marginBottom:16}}>
-        {["all","due"].map(f=>(
-          <button key={f} onClick={()=>{setFilter(f);setIdx(0);setFlip(false);}}
-            style={{background:filter===f?C.gold+"22":"transparent",border:`1px solid ${filter===f?C.gold:C.border}`,
-            borderRadius:7,padding:"6px 14px",cursor:"pointer",fontSize:12,color:filter===f?C.gold:C.muted,fontFamily:F.b,fontWeight:600}}>
-            {f==="all"?"All Cards":"Due Today"}
-          </button>
-        ))}
-      </div>
-      {!done?(
-        <>
-          <div style={{marginBottom:8,fontSize:12,color:C.muted,textAlign:"right"}}>{idx+1} / {deck.length}</div>
-          <div onClick={()=>setFlip(!flip)} style={{background:C.card,border:`1px solid ${flip?C.gold+"66":C.border}`,
-            borderRadius:16,padding:"32px 24px",minHeight:200,cursor:"pointer",marginBottom:16,
-            display:"flex",flexDirection:"column",justifyContent:"center",transition:"border-color .3s"}}>
-            <div style={{fontSize:10,color:flip?C.gold:C.accent,letterSpacing:"0.15em",fontWeight:700,marginBottom:14,textTransform:"uppercase"}}>
-              {flip?"Answer":"Question — tap to flip"}
-            </div>
-            <div style={{fontSize:"clamp(13px,3vw,16px)",color:C.text,lineHeight:1.7,whiteSpace:"pre-line"}}>{flip?card.a:card.q}</div>
-            {!flip&&<div style={{position:"absolute",bottom:16,right:20,opacity:.3,fontSize:14}}>👆</div>}
-            {card.topic&&<div style={{marginTop:14}}><Badge color={C.muted} small>{card.topic}</Badge></div>}
-          </div>
-          {flip&&(
-            <div className="fi">
-              <div style={{fontSize:11,color:C.muted,textAlign:"center",marginBottom:8}}>How well did you know this?</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}}>
-                {[{q:1,l:"Forgot",c:C.err},{q:2,l:"Hard",c:C.warn},{q:3,l:"OK",c:C.gold},{q:4,l:"Easy",c:C.ok}].map(r=>(
-                  <button key={r.q} onClick={()=>rate(r.q)} style={{background:r.c+"22",border:`1px solid ${r.c}44`,
-                    borderRadius:8,padding:"10px 4px",cursor:"pointer",textAlign:"center",color:r.c,
-                    fontFamily:F.b,fontSize:11,fontWeight:600}}>
-                    {r.l}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </>
-      ):(
-        <div style={{textAlign:"center",padding:"40px 0"}}>
-          <div style={{fontSize:32,marginBottom:12}}>🎉</div>
-          <h3 style={{fontFamily:F.d,fontSize:20,color:C.text,marginBottom:8}}>All Done!</h3>
-          <p style={{color:C.muted,fontSize:13,marginBottom:20}}>You've reviewed all {deck.length} cards. Come back tomorrow for spaced repetition.</p>
-          <Btn onClick={()=>{setIdx(0);setFlip(false);}}>Review Again</Btn>
-        </div>
-      )}
-    </div>
-  );
-}
+  function startExam() {
+    const exam = generateExam(profile, examType);
+    setActiveSession(exam);
+    setScreen("daily");
+  }
 
-// EXAM SIMULATION
-function ExamSim({profile,examType,onComplete,onBack}){
-  const [questions,setQuestions]=useState([]);
-  const [qi,setQi]=useState(0);
-  const [answers,setAnswers]=useState([]);
-  const [sel,setSel]=useState(null);
-  const [showReview,setShowReview]=useState(false);
-  const [loading,setLoading]=useState(false);
-  const [loadingMore,setLoadingMore]=useState(false);
-  const [started,setStarted]=useState(false);
-  const [phase,setPhase]=useState("intro");// intro|exam|results
-  const [results,setResults]=useState(null);
+  function saveUpdatedProfile(next) {
+    setProfile(next);
+  }
 
-  const isWeekly=examType==="weekly";
-  const targetQ=isWeekly?60:180;
-  const batchSize=20;
-
-  const loadBatch=useCallback(async(batchNum)=>{
-    setLoadingMore(true);
-    try{
-      const batch=await generateExamBatch(profile,batchNum,batchSize,examType);
-      setQuestions(prev=>[...prev,...batch]);
-    }catch(e){console.error("Batch load error:",e);}
-    finally{setLoadingMore(false);}
-  },[profile,examType]);
-
-  const startExam=async()=>{
-    setPhase("loading");
-    setLoading(true);
-    try{
-      const batch=await generateExamBatch(profile,1,batchSize,examType);
-      setQuestions(batch);
-      setPhase("exam");
-    }catch(e){setPhase("intro");}
-    finally{setLoading(false);}
-  };
-
-  const handlePick=(ch)=>{
-    if(sel!==null)return;
-    setSel(ch);
-    setShowReview(true);
-  };
-
-  const handleNext=async()=>{
-    const newAnswers=[...answers,sel];
-    const nextQi=qi+1;
-    setAnswers(newAnswers);
-    setQi(nextQi);
-    setSel(null);
-    setShowReview(false);
-    // Load more batches as needed
-    if(nextQi>=questions.length&&questions.length<targetQ&&!loadingMore){
-      await loadBatch(Math.floor(questions.length/batchSize)+1);
-    }
-    if(nextQi>=targetQ||(nextQi>=questions.length&&questions.length>=targetQ)){
-      // Calculate results
-      const correct=newAnswers.filter((a,i)=>a===questions[i]?.correct).length;
-      const score=Math.round(correct/Math.min(newAnswers.length,targetQ)*100);
-      const domCorrect={people:0,process:0,bizEnv:0};
-      const domTotal={people:0,process:0,bizEnv:0};
-      newAnswers.forEach((a,i)=>{
-        const q=questions[i];if(!q)return;
-        const dom=q.domain||"process";
-        domTotal[dom]=(domTotal[dom]||0)+1;
-        if(a===q.correct)domCorrect[dom]=(domCorrect[dom]||0)+1;
-      });
-      const domScores={
-        people:domTotal.people>0?Math.round(domCorrect.people/domTotal.people*100):0,
-        process:domTotal.process>0?Math.round(domCorrect.process/domTotal.process*100):0,
-        bizEnv:domTotal.bizEnv>0?Math.round(domCorrect.bizEnv/domTotal.bizEnv*100):0,
-      };
-      const passProb=score>=65?Math.round(50+score*.5):Math.round(score*.8);
-      setResults({score,correct,total:newAnswers.length,domScores,passProb});
-      setPhase("results");
-      onComplete({score,domScores,passProb,examType,day:getDay(profile.startDate),total:newAnswers.length,questions:questions.slice(0,newAnswers.length),answers:newAnswers});
-    }
-  };
-
-  const q=questions[qi];
-  const progress=Math.round((qi/targetQ)*100);
-
-  if(phase==="intro")return(
-    <div className="fi" style={{padding:"24px 20px 60px"}}>
-      <div style={{display:"flex",justifyContent:"space-between",marginBottom:24}}>
-        <Btn v="ghost" onClick={onBack}>← Back</Btn>
-        <Badge color={isWeekly?C.gold:C.err}>{isWeekly?"Weekly Exam":"Full Exam Sim"}</Badge>
-      </div>
-      <h2 style={{fontFamily:F.d,fontSize:22,color:C.text,marginBottom:8}}>{isWeekly?"Weekly Assessment":"Full PMP Simulation"}</h2>
-      <p style={{color:C.muted,fontSize:13,marginBottom:20}}>{isWeekly?"60 scenario-based questions. Same format as the real PMP exam.":"180 questions. Full exam simulation. Expected time: 4 hours in real exam."}</p>
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px 18px",marginBottom:20}}>
-        {[
-          `${targetQ} PMP-style situational questions`,
-          "Mixed difficulty: Medium, Hard, and Exam-level",
-          "All three ECO domains: People, Process, Business Env",
-          isWeekly?"Weekly cadence check":"Scheduled full sims on Days 25, 40, and 55",
-          "Immediate explanation after each question",
-          `Domain-level score breakdown at completion`,
-          isWeekly?"~60 min":"~180 min estimated",
-        ].map((item,i)=>(
-          <div key={i} style={{display:"flex",gap:8,marginBottom:6}}>
-            <span style={{color:C.gold,flexShrink:0}}>→</span>
-            <span style={{fontSize:13,color:C.muted}}>{item}</span>
-          </div>
-        ))}
-      </div>
-      <Btn full onClick={startExam} s={{padding:"14px",fontSize:14}}>
-        Begin Exam — {targetQ} Questions
-      </Btn>
-    </div>
-  );
-
-  if(phase==="loading")return(
-    <div style={{padding:"40px 20px",textAlign:"center"}}>
-      <div className="pulse" style={{fontSize:32,marginBottom:16}}>📋</div>
-      <div style={{fontFamily:F.d,fontSize:18,color:C.text,marginBottom:8}}>Generating Your Exam</div>
-      <div style={{fontSize:13,color:C.muted,marginBottom:20}}>AI is crafting {batchSize} unique scenario questions...</div>
-      <ShimmerBlock h={80}/><ShimmerBlock h={50}/><ShimmerBlock h={50}/><ShimmerBlock h={50}/>
-    </div>
-  );
-
-  if(phase==="results"&&results)return(
-    <div className="fi" style={{padding:"24px 20px 60px"}}>
-      <div style={{textAlign:"center",marginBottom:24}}>
-        <div style={{fontSize:11,color:C.gold,fontWeight:700,letterSpacing:"0.15em",textTransform:"uppercase",marginBottom:8}}>
-          {isWeekly?"Weekly Exam Complete":"Full Simulation Complete"}
-        </div>
-        <div style={{fontFamily:F.d,fontSize:52,color:results.score>=70?C.ok:results.score>=50?C.gold:C.err,lineHeight:1,marginBottom:4}}>
-          {results.score}<span style={{fontSize:22}}>%</span>
-        </div>
-        <div style={{fontSize:14,color:C.muted,marginBottom:4}}>{results.correct} of {results.total} correct</div>
-        <Badge color={results.passProb>=70?C.ok:C.warn}>Pass Probability: ~{results.passProb}%</Badge>
-      </div>
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px 18px",marginBottom:16}}>
-        <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:"0.1em",marginBottom:14}}>DOMAIN BREAKDOWN</div>
-        <DomainBar label="People" score={results.domScores.people} color={C.people}/>
-        <DomainBar label="Process" score={results.domScores.process} color={C.process}/>
-        <DomainBar label="Business Environment" score={results.domScores.bizEnv} color={C.biz}/>
-      </div>
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 16px",marginBottom:16}}>
-        <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:8}}>READINESS ASSESSMENT</div>
-        {results.score>=80&&<p style={{fontSize:13,color:C.muted}}>🌟 Excellent performance. You're tracking well above target. Maintain this and you're on pace to pass with Above Target scores.</p>}
-        {results.score>=70&&results.score<80&&<p style={{fontSize:13,color:C.muted}}>✓ Good performance. You're on track to pass. Focus on your lowest domain to push into Above Target territory.</p>}
-        {results.score>=55&&results.score<70&&<p style={{fontSize:13,color:C.muted}}>⚡ You're getting there. Focus on improving your weakest domain and practice more scenario-based questions. You need more exam-level practice.</p>}
-        {results.score<55&&<p style={{fontSize:13,color:C.muted}}>⚠ More work needed. Revisit fundamentals, especially in your lowest domains. Focus on understanding WHY answers are correct, not just memorizing content.</p>}
-      </div>
-      <Btn full onClick={onBack} s={{padding:"14px",fontSize:14}}>Back to Dashboard</Btn>
-    </div>
-  );
-
-  // Exam question view
-  if(!q)return(
-    <div style={{padding:"40px 20px",textAlign:"center"}}>
-      <div className="pulse" style={{fontSize:32,marginBottom:12}}>⏳</div>
-      <div style={{fontSize:14,color:C.muted}}>Loading next questions...</div>
-      <ShimmerBlock h={80}/><ShimmerBlock h={48}/><ShimmerBlock h={48}/>
-    </div>
-  );
-
-  const isCorrect=sel&&sel===q.correct;
-  const domColor=DC[q.domain]||C.gold;
-
-  const cc=(ch)=>{
-    if(!sel)return{bg:C.card,br:C.border,col:C.text};
-    if(ch===q.correct)return{bg:C.ok+"22",br:C.ok,col:C.text};
-    if(ch===sel&&ch!==q.correct)return{bg:C.err+"22",br:C.err,col:C.text};
-    return{bg:C.card,br:C.border+"44",col:C.muted};
-  };
-
-  return(
-    <div className="fi" style={{padding:"14px 20px 60px"}}>
-      <div style={{marginBottom:14}}>
-        <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-          <div style={{display:"flex",gap:6}}>
-            <Badge color={domColor} small>{DL[q.domain]||q.domain}</Badge>
-            <Badge color={C.muted} small>Q{qi+1}/{targetQ}</Badge>
-          </div>
-          <span style={{fontSize:12,color:isWeekly?C.gold:C.err,fontWeight:600}}>{isWeekly?"Weekly":"Full Exam"}</span>
-        </div>
-        <div style={{background:C.border,borderRadius:99,height:3}}>
-          <div style={{width:`${progress}%`,height:"100%",background:`linear-gradient(90deg,${C.gold},${C.ok})`,transition:"width .4s"}}/>
-        </div>
-      </div>
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px",marginBottom:12,fontSize:14,color:C.text,lineHeight:1.75}}>{q.q}</div>
-      <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:14}}>
-        {q.choices.map((c,i)=>{
-          const col=cc(c);
-          return(
-            <button key={i} onClick={()=>handlePick(c)} style={{background:col.bg,border:`1px solid ${col.br}`,
-              borderRadius:10,padding:"11px 14px",cursor:sel?"default":"pointer",textAlign:"left",
-              color:col.col,fontFamily:F.b,fontSize:13,lineHeight:1.5,transition:"all .2s",
-              display:"flex",gap:10,alignItems:"flex-start"}}>
-              <span style={{fontWeight:700,flexShrink:0,color:!sel?C.muted:c===q.correct?C.ok:c===sel?C.err:C.muted}}>{c.charAt(0)}.</span>
-              <span>{c.slice(3)}</span>
-            </button>
-          );
-        })}
-      </div>
-      {showReview&&(
-        <div className="fi">
-          <div style={{background:isCorrect?C.ok+"15":C.err+"15",border:`1px solid ${isCorrect?C.ok:C.err}44`,
-            borderRadius:10,padding:"12px 14px",marginBottom:10}}>
-            <div style={{fontSize:11,fontWeight:700,color:isCorrect?C.ok:C.err,marginBottom:6}}>
-              {isCorrect?"✓ CORRECT":"✗ INCORRECT"} — Answer: {q.correct}
-            </div>
-            <div style={{fontSize:12,color:C.muted,lineHeight:1.6}}>{q.whyCorrect}</div>
-          </div>
-          <div style={{background:C.purple+"12",border:`1px solid ${C.purple}33`,borderRadius:8,padding:"8px 12px",marginBottom:10}}>
-            <span style={{fontSize:10,color:C.purple,fontWeight:700}}>TRAP: </span>
-            <span style={{fontSize:11,color:C.muted}}>{q.trap}</span>
-          </div>
-          {loadingMore&&<div style={{textAlign:"center",fontSize:12,color:C.muted,padding:"6px 0"}}>Loading next questions...</div>}
-          <Btn full onClick={handleNext} s={{padding:"11px",fontSize:13}}>
-            {qi+1<targetQ?`Next Question →`:"See Results →"}
-          </Btn>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── MAIN APP ─────────────────────────────────────────────────────────────────
-export default function App(){
-  const [profile,setProfile]=useState(null);
-  const [screen,setScreen]=useState("loading");// loading|onboarding|dashboard|setup|session|flashcards|exam
-  const [sessionData,setSessionData]=useState(null);
-  const [sessionPhase,setSessionPhase]=useState("loading");// loading|lesson|questions|summary
-  const [summaryData,setSummaryData]=useState(null);
-  const [summaryLoading,setSummaryLoading]=useState(false);
-  const [sessionAnswers,setSessionAnswers]=useState([]);
-  const [sessionQuestions,setSessionQuestions]=useState([]);
-  const [examType,setExamType]=useState("weekly");
-  const [sessionError,setSessionError]=useState(null);
-
-  // Load profile on mount
-  useEffect(()=>{
-    loadProfile().then(p=>{
-      if(p){setProfile(p);setScreen("dashboard");}
-      else{setScreen("onboarding");}
-    });
-  },[]);
-
-  const persistProfile=(p)=>{setProfile(p);saveProfile(p);};
-
-  const handleOnboardingComplete=async(intensity)=>{
-    const p=freshProfile(intensity);
-    persistProfile(p);
-    setScreen("setup");
-  };
-
-  const handleStartSession=async(intensity)=>{
-    setScreen("session");
-    setSessionPhase("loading");
-    setSessionError(null);
-    setSessionData(null);
-    setSummaryData(null);
-    try{
-      const data=await generateSession(profile,intensity);
-      setSessionData({...data,intensity});
-      const updatedProfile={...profile,preferredIntensity:intensity,lastLesson:data.lesson?.focusTopic||null};
-      persistProfile(updatedProfile);
-      setSessionPhase("lesson");
-    }catch(e){
-      setSessionError("Failed to generate session. Please check your connection and try again.");
-      setSessionPhase("error");
-    }
-  };
-
-  const handleQuestionsComplete=async(answers,questions)=>{
-    setSessionAnswers(answers);
-    setSessionQuestions(questions);
-    const correct=answers.filter((a,i)=>a===questions[i]?.correct).length;
-    const score=Math.round(correct/answers.length*100);
-    // Find weak topics this session
-    const topicErrors={};
-    answers.forEach((a,i)=>{
-      const q=questions[i];if(!q||a===q.correct)return;
-      topicErrors[q.topic]=(topicErrors[q.topic]||0)+1;
-    });
-    const weakTopics=Object.entries(topicErrors).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k])=>k);
-    // Build domain scores for this session
-    const dc={people:0,process:0,bizEnv:0},dt={people:0,process:0,bizEnv:0};
-    answers.forEach((a,i)=>{const q=questions[i];if(!q)return;const dom=q.domain||"process";dt[dom]++;if(a===q.correct)dc[dom]++;});
-    const domScores={
-      people:dt.people>0?Math.round(dc.people/dt.people*100):null,
-      process:dt.process>0?Math.round(dc.process/dt.process*100):null,
-      bizEnv:dt.bizEnv>0?Math.round(dc.bizEnv/dt.bizEnv*100):null,
-    };
-    // Auto-generate flashcards from missed questions
-    const newFlashcards=questions
-      .filter((q,i)=>answers[i]!==q.correct)
-      .slice(0,5)
-      .map(q=>({
-        q:q.q,
-        a:`Correct: ${q.correct}\n\n${q.whyCorrect}\n\nTrap: ${q.trap}`,
-        topic:q.topic,ease:2.5,interval:1,
-        nextReview:new Date(Date.now()+86400000).toISOString().split("T")[0],
-      }));
-    // Update profile
-    const updatedProfile=updateProfile(profile,answers,questions);
-    updatedProfile.flashcards=[...updatedProfile.flashcards,...newFlashcards].slice(-100);
-    const sessionEntry={
-      day:getDay(profile.startDate),
-      intensity:sessionData?.intensity||"Standard",
-      score,correct,total:answers.length,weakTopics,
-      date:new Date().toISOString().split("T")[0],
-    };
-    updatedProfile.sessionHistory=[...updatedProfile.sessionHistory,sessionEntry].slice(-10);
-    persistProfile(updatedProfile);
-    setSessionPhase("summary");
-    setSummaryData({score,correct,total:answers.length,weakTopics,newFlashcards});
-    // Get AI coaching summary
-    setSummaryLoading(true);
-    try{
-      const sum=await generateSummary(score,domScores,weakTopics,sessionData?.intensity||"Standard",getDay(profile.startDate));
-      setSummaryData(prev=>({...prev,summary:sum}));
-    }catch{}
-    setSummaryLoading(false);
-  };
-
-  const handleExamComplete=(examResult)=>{
-    const updatedProfile={...profile};
-    if(examResult.examType==="weekly"){
-      updatedProfile.weeklyExams=[...updatedProfile.weeklyExams,examResult];
-    }else{
-      updatedProfile.fullExams=[...updatedProfile.fullExams,examResult];
-    }
-    // Count exam questions toward study volume + unique target
-    const seenSet=new Set(updatedProfile.seenQuestionKeys||[]);
-    (examResult.questions||[]).forEach(q=>seenSet.add(questionKey(q)));
-    updatedProfile.seenQuestionKeys=[...seenSet].slice(-1000);
-    updatedProfile.totalUniqueAnswered=seenSet.size;
-    updatedProfile.totalAnswered=(updatedProfile.totalAnswered||0)+(examResult.total||0);
-    // Also update domain scores
-    Object.entries(examResult.domScores).forEach(([dom,score])=>{
-      if(score>0)updatedProfile.domains[dom]=Math.round(updatedProfile.domains[dom]*.6+score*.4);
-    });
-    updatedProfile.readiness=calcReadiness(updatedProfile);
-    persistProfile(updatedProfile);
-  };
-
-  // ── RENDER ──
-  const day=profile?getDay(profile.startDate):1;
-
-  if(screen==="loading")return(
-    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <div style={{textAlign:"center"}}>
-        <div className="pulse" style={{fontFamily:F.d,fontSize:24,color:C.gold,marginBottom:8}}>PMP Coach</div>
-        <div style={{fontSize:12,color:C.muted}}>Loading your profile...</div>
-      </div>
-    </div>
-  );
-
-  return(
-    <div style={{minHeight:"100vh",background:C.bg,fontFamily:F.b,color:C.text,maxWidth:580,margin:"0 auto"}}>
-      <style>{GS}</style>
-
-      {/* Top Bar */}
-      {screen!=="onboarding"&&(
-        <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"11px 20px",
-          display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100}}>
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <div style={{width:26,height:26,background:`linear-gradient(135deg,${C.gold},#b8821a)`,borderRadius:6,
-              display:"flex",alignItems:"center",justifyContent:"center",fontSize:13}}>📐</div>
+  return (
+    <div style={{
+      minHeight: "100vh",
+      background: `linear-gradient(180deg, ${COLORS.bg}, #0f1730)`,
+      color: COLORS.text,
+      fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+      padding: 16,
+    }}>
+      <div style={{ maxWidth: 900, margin: "0 auto" }}>
+        <div style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 10,
+          background: "rgba(11,16,32,0.85)",
+          backdropFilter: "blur(10px)",
+          borderBottom: `1px solid ${COLORS.border}`,
+          padding: "14px 0",
+          marginBottom: 18,
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
             <div>
-              <div style={{fontFamily:F.d,fontSize:13,fontWeight:700,color:C.text,lineHeight:1}}>PMP Coach</div>
-              <div style={{fontSize:9,color:C.muted,letterSpacing:"0.05em"}}>Day {day}/60 · PMBOK 8</div>
+              <div style={{ fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase", color: COLORS.gold, fontWeight: 800 }}>PMP Coach</div>
+              <div style={{ fontSize: 22, fontWeight: 900 }}>PMBOK 8 + Agile Practice Guide Study System</div>
+              <div style={{ color: COLORS.muted, fontSize: 13 }}>Day {day}/60 · starter flashcards from Day 1 · new flashcards auto-created from misses</div>
             </div>
-          </div>
-          <div style={{display:"flex",gap:6,alignItems:"center"}}>
-            {profile&&<span style={{fontSize:11,color:C.gold,fontWeight:600}}>{profile.readiness}% ready</span>}
-            {screen!=="dashboard"&&(
-              <button onClick={()=>setScreen("dashboard")} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:12,fontFamily:F.b}}>🏠</button>
-            )}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <Pill>{profile.uniqueAnswered} unique Qs</Pill>
+              <Pill>{dueFlashcards(profile, day).length} cards due</Pill>
+              <Pill>{profile.readiness}% ready</Pill>
+            </div>
           </div>
         </div>
-      )}
 
-      {/* Screens */}
-      {screen==="onboarding"&&<Onboarding onStart={handleOnboardingComplete}/>}
+        {screen === "dashboard" && (
+          <Dashboard
+            profile={profile}
+            onStartSession={startDaily}
+            onOpenFlashcards={() => setScreen("flashcards")}
+            onOpenExam={(type) => { setExamType(type); setScreen("examIntro"); }}
+            onAdvanceDay={() => setProfile(advanceDay(profile))}
+            onReset={() => { if (window.confirm("Reset all progress?")) setProfile(resetProgress()); }}
+          />
+        )}
 
-      {screen==="dashboard"&&profile&&(
-        <Dashboard
-          profile={profile}
-          onSession={()=>setScreen("setup")}
-          onFlashcards={()=>setScreen("flashcards")}
-          onExam={(type)=>{setExamType(type);setScreen("exam");}}
-        />
-      )}
+        {screen === "daily" && activeSession && (
+          <DailySession
+            profile={profile}
+            session={activeSession}
+            onSubmit={submitSession}
+            onCancel={() => { setActiveSession(null); setScreen("dashboard"); }}
+          />
+        )}
 
-      {screen==="setup"&&profile&&(
-        <SessionSetup
-          profile={profile}
-          onStart={handleStartSession}
-          onBack={()=>setScreen("dashboard")}
-        />
-      )}
+        {screen === "review" && reviewBundle && (
+          <ReviewScreen resultBundle={reviewBundle} onBack={() => setScreen("dashboard")} />
+        )}
 
-      {screen==="session"&&(
-        <>
-          {sessionPhase==="loading"&&(
-            <div style={{padding:"40px 24px",textAlign:"center"}}>
-              <div className="pulse" style={{fontSize:32,marginBottom:16}}>🧠</div>
-              <div style={{fontFamily:F.d,fontSize:18,color:C.text,marginBottom:8}}>Building Your Session</div>
-              <div style={{fontSize:13,color:C.muted,marginBottom:20}}>AI is generating a personalized lesson and questions based on your gaps...</div>
-              <ShimmerBlock h={100}/><ShimmerBlock h={60}/><ShimmerBlock h={60}/><ShimmerBlock h={60}/>
-            </div>
-          )}
-          {sessionPhase==="error"&&(
-            <div style={{padding:"40px 24px",textAlign:"center"}}>
-              <div style={{fontSize:32,marginBottom:12}}>⚠</div>
-              <div style={{fontFamily:F.d,fontSize:18,color:C.text,marginBottom:8}}>Session Load Failed</div>
-              <p style={{color:C.muted,fontSize:13,marginBottom:20}}>{sessionError}</p>
-              <Btn onClick={()=>setScreen("setup")}>Try Again</Btn>
-            </div>
-          )}
-          {sessionPhase==="lesson"&&sessionData?.lesson&&(
-            <LessonPhase lesson={sessionData.lesson} onContinue={()=>setSessionPhase("questions")}/>
-          )}
-          {sessionPhase==="questions"&&sessionData?.questions&&(
-            <QuestionPhase questions={sessionData.questions} onComplete={handleQuestionsComplete}/>
-          )}
-          {sessionPhase==="summary"&&summaryData&&(
-            <SessionSummary
-              score={summaryData.score}
-              correct={summaryData.correct}
-              total={summaryData.total}
-              summary={summaryData.summary}
-              newFlashcards={summaryData.newFlashcards}
-              weakTopics={summaryData.weakTopics}
-              loading={summaryLoading}
-              onDone={()=>setScreen("dashboard")}
-            />
-          )}
-        </>
-      )}
+        {screen === "flashcards" && (
+          <FlashcardScreen profile={profile} onSaveProfile={saveUpdatedProfile} onBack={() => setScreen("dashboard")} />
+        )}
 
-      {screen==="flashcards"&&profile&&(
-        <FlashcardDeck
-          profile={profile}
-          onBack={()=>setScreen("dashboard")}
-          onUpdate={(p)=>{persistProfile(p);setProfile(p);}}
-        />
-      )}
+        {screen === "examIntro" && (
+          <ExamIntro type={examType} onStart={startExam} onBack={() => setScreen("dashboard")} />
+        )}
 
-      {screen==="exam"&&profile&&(
-        <ExamSim
-          profile={profile}
-          examType={examType}
-          onComplete={handleExamComplete}
-          onBack={()=>setScreen("dashboard")}
-        />
-      )}
+        <div style={{ color: COLORS.muted, fontSize: 12, marginTop: 22, lineHeight: 1.7 }}>
+          Built from your PMBOK 8 study guide, detailed notes, and Agile Practice Guide themes: principle-based PMBOK structure, 7 performance domains, 5 focus areas, value delivery, ethics, tailoring, backlog-based adaptive work, servant leadership, Scrum/Kanban flow, and hybrid delivery.
+        </div>
+      </div>
     </div>
   );
 }
